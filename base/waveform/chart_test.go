@@ -2,6 +2,7 @@ package waveform_test
 
 import (
 	"math"
+	"strconv"
 	"testing"
 
 	"github.com/nsgo-dev/nsgo/base/waveform"
@@ -205,6 +206,68 @@ func TestChartLegendNotesAndBands(t *testing.T) {
 	for _, text := range []string{"text:CH1", "text:trigger", "text:safe"} {
 		if !app.Exists(text) {
 			t.Errorf("no view shows %q", text)
+		}
+	}
+}
+
+func TestMeasureMarkersHoldTheirPlaceWhileFollowing(t *testing.T) {
+	src := waveform.NewSource(0, 0.001)
+	src.Push(waveSamples(10000))
+	app := nsgotest.Start(t, func(cx *core.Scope) core.Node {
+		return waveform.Chart{
+			TestID:  "wave",
+			Series:  []waveform.Series{{Source: src, Color: core.RGB(0x1a7f37)}},
+			Follow:  1,
+			Measure: true,
+			Style:   core.Style{Width: core.Pt(600), Height: core.Pt(300)},
+		}
+	}, nsgotest.Size(800, 600))
+	app.Settle()
+	before := app.Find("id:wave-mark-a").Frame.Origin.X
+	app.Post(func() { src.Push(waveSamples(2000)) })
+	app.Settle()
+	after := app.Find("id:wave-mark-a").Frame.Origin.X
+	if before != after {
+		t.Fatalf("a following window moved the marker: %v -> %v", before, after)
+	}
+}
+
+func TestChartFormatsItsXTicks(t *testing.T) {
+	app := nsgotest.Start(t, func(cx *core.Scope) core.Node {
+		return waveform.Chart{
+			TestID: "wave",
+			Series: []waveform.Series{{Y: waveSamples(10000), X0: 0, Dx: 0.001,
+				Color: core.RGB(0x1a7f37)}},
+			XFormat: func(v float64) string {
+				return "T" + strconv.FormatFloat(v, 'f', 1, 64)
+			},
+			Style: core.Style{Width: core.Pt(600), Height: core.Pt(300)},
+		}
+	}, nsgotest.Size(800, 600))
+	app.Settle()
+	if !app.Exists("text:T") {
+		t.Fatal("the x axis did not use the app's formatter")
+	}
+}
+
+func TestChartLabelsEachYAxis(t *testing.T) {
+	y := waveSamples(10000)
+	app := nsgotest.Start(t, func(cx *core.Scope) core.Node {
+		return waveform.Chart{
+			TestID: "wave",
+			Series: []waveform.Series{
+				{Y: y, X0: 0, Dx: 0.001, Axis: 0, Color: core.RGB(0x1a7f37)},
+				{Y: y, X0: 0, Dx: 0.001, Axis: 1, Color: core.RGB(0xcc3333)},
+				{Y: y, X0: 0, Dx: 0.001, Axis: 2, Color: core.RGB(0x3333cc)},
+			},
+			Axes:  []waveform.Axis{{Title: "V"}, {Title: "mV"}, {Title: "A"}},
+			Style: core.Style{Width: core.Pt(600), Height: core.Pt(300)},
+		}
+	}, nsgotest.Size(800, 600))
+	app.Settle()
+	for _, id := range []string{"id:wave-y0-0", "id:wave-y1-0", "id:wave-y2-0"} {
+		if !app.Exists(id) {
+			t.Errorf("no label for the y axis %s", id)
 		}
 	}
 }

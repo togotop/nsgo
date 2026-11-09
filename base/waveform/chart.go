@@ -1,6 +1,7 @@
 package waveform
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/nsgo-dev/nsgo/core"
@@ -29,9 +30,12 @@ type Chart struct {
 	Notes  []Note
 	Height core.Points
 	Time   bool
-	Follow float64
-	View   Viewport
-	Sync   *Group
+	// XFormat labels the x axis' ticks. Without it a number formats
+	// compactly; a Time chart's app gives the words for a date or a time.
+	XFormat func(float64) string
+	Follow  float64
+	View    Viewport
+	Sync    *Group
 
 	Cursor bool
 	Legend bool
@@ -66,6 +70,17 @@ func (c Chart) axisCount() int {
 		return n
 	}
 	return 1
+}
+
+// plotInsets is the room the y axes take beside the plot. The first axis
+// sits on the left; every other one gets a column of its own on the right.
+func (c Chart) plotInsets() (left, right core.Points) {
+	left = axisRoom
+	right = rightRoom
+	if n := c.axisCount(); n > 1 {
+		right += core.Points(n-1) * axisRoom
+	}
+	return
 }
 
 func (c Chart) axisAt(k int) Axis {
@@ -182,6 +197,9 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 	for i := range c.Series {
 		if s := c.Series[i].Source; s != nil {
 			s.attach(cx)
+			if c.Follow > 0 {
+				s.Retain(2 * c.Follow)
+			}
 		}
 	}
 	if c.Sync != nil {
@@ -270,9 +288,9 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 			f.ticksY[k] = a.ticks(r.Lo, r.Hi, 4)
 		}
 		if c.Time {
-			f.ticksX = timeTicks(vx.Lo, vx.Hi, 6, nil)
+			f.ticksX = timeTicks(vx.Lo, vx.Hi, 6, c.XFormat)
 		} else {
-			f.ticksX = linearTicks(vx.Lo, vx.Hi, 6, nil)
+			f.ticksX = linearTicks(vx.Lo, vx.Hi, 6, c.XFormat)
 		}
 		return f
 	})
@@ -355,21 +373,27 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 	}
 
 	if c.Measure {
+		// The markers are fractions of the view, not data x: they hold
+		// their place on screen as a following window slides, and a zoom
+		// keeps them measuring the stretch the user sees.
 		cx.Effect(func() {
-			f := decimated.Get()
-			if f == nil || !math.IsNaN(markA.GetUntracked()) {
+			if !math.IsNaN(markA.GetUntracked()) {
 				return
 			}
-			markA.Set(f.vx.Lo + f.vx.Span()/3)
-			markB.Set(f.vx.Lo + 2*f.vx.Span()/3)
+			markA.Set(1.0 / 3)
+			markB.Set(2.0 / 3)
 		})
 	}
 
+	left, right := c.plotInsets()
 	p := parts{c: c, f: decimated, hover: hover, fade: fade, markA: markA, markB: markB,
-		states: states, plotSize: plotSize}
+		states: states, plotSize: plotSize, left: left}
 	children := []core.Node{canvas}
-	children = append(children, axisLabels(c, decimated, false)...)
-	children = append(children, axisLabels(c, decimated, true)...)
+	children = append(children, axisLabels(c, decimated, false, 0, left)...)
+	for k := 1; k < c.axisCount(); k++ {
+		children = append(children, axisLabels(c, decimated, false, k, left)...)
+	}
+	children = append(children, axisLabels(c, decimated, true, 0, left)...)
 	children = append(children, p.nodes()...)
 
 	plotTop := topRoom
@@ -377,8 +401,8 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 		plotTop += 20
 	}
 	plot := core.View{
-		Style: core.Style{Position: core.Absolute, Left: core.Pt(axisRoom), Top: core.Pt(plotTop),
-			Right: core.Pt(rightRoom), Bottom: core.Pt(bottomRoom)},
+		Style: core.Style{Position: core.Absolute, Left: core.Pt(left), Top: core.Pt(plotTop),
+			Right: core.Pt(right), Bottom: core.Pt(bottomRoom)},
 		Children: children,
 	}
 	height := c.Height
@@ -414,10 +438,11 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 	return root
 }
 
-// axisLabels builds the tick labels of the left y axis or the bottom x
-// axis. Each is a text the app styles; a change of a tick's position or
-// label moves it without making a new view.
-func axisLabels(c Chart, f *core.Memo[*frame], x bool) []core.Node {
+// axisLabels builds the tick labels of one axis: the bottom x axis when x
+// is true, else the y axis at axis, the first on the left and every other
+// in a column of its own on the right. Each is a text the app styles; a
+// change of a tick's position or label moves it without making a new view.
+func axisLabels(c Chart, f *core.Memo[*frame], x bool, axis int, left core.Points) []core.Node {
 	ticks := func() []Tick {
 		fr := f.Get()
 		if fr == nil {
@@ -426,18 +451,27 @@ func axisLabels(c Chart, f *core.Memo[*frame], x bool) []core.Node {
 		if x {
 			return fr.ticksX
 		}
-		if len(fr.ticksY) > 0 {
-			return fr.ticksY[0]
+		if axis >= 0 && axis < len(fr.ticksY) {
+			return fr.ticksY[axis]
 		}
 		return nil
 	}
 	const slots = 12
 	out := make([]core.Node, 0, slots)
 	for i := range slots {
+		id := ""
+		if c.TestID != "" {
+			if x {
+				id = fmt.Sprintf("%s-x-%d", c.TestID, i)
+			} else {
+				id = fmt.Sprintf("%s-y%d-%d", c.TestID, axis, i)
+			}
+		}
 		out = append(out, core.Show{When: func() bool { return i < len(ticks()) },
 			Then: func(*core.Scope) core.Node {
 				return core.Text{
-					Class: c.AxisClass,
+					TestID: id,
+					Class:  c.AxisClass,
 					ContentFunc: func() string {
 						ts := ticks()
 						if i >= len(ts) {
@@ -452,15 +486,20 @@ func axisLabels(c Chart, f *core.Memo[*frame], x bool) []core.Node {
 						}
 						t := ts[i]
 						s := core.Style{Position: core.Absolute}
-						if x {
+						switch {
+						case x:
 							s.Left = core.Pct(float32(t.At * 100))
 							s.Top = core.Pct(100)
 							s.Margin = core.Edges{Top: 4}
-						} else {
-							s.Left = core.Pt(-axisRoom)
+						case axis == 0:
+							s.Left = core.Pt(-left)
 							s.Top = core.Pct(float32((1 - t.At) * 100))
-							s.Width = core.Pt(axisRoom - 8)
+							s.Width = core.Pt(left - 8)
 							s.Margin = core.Edges{Top: -7}
+						default:
+							s.Left = core.Pct(100)
+							s.Top = core.Pct(float32((1 - t.At) * 100))
+							s.Margin = core.Edges{Left: core.Points(axis-1)*axisRoom + 4, Top: -7}
 						}
 						return s.Merge(c.AxisStyle)
 					},

@@ -18,6 +18,7 @@ type parts struct {
 	markA, markB   *core.Signal[float64]
 	states         []*seriesState
 	plotSize       *core.Signal[core.Size]
+	left           core.Points
 }
 
 // cursorX is the data x under this chart's pointer, or the group's cursor
@@ -125,7 +126,7 @@ func (p parts) legend() core.Node {
 	}
 	return core.View{
 		Class: p.c.LegendClass,
-		Style: core.Style{Position: core.Absolute, Left: core.Pt(axisRoom), Top: core.Pt(2),
+		Style: core.Style{Position: core.Absolute, Left: core.Pt(p.left), Top: core.Pt(2),
 			Right: core.Pt(rightRoom), Direction: core.Row, Gap: 16}.Merge(p.c.LegendStyle),
 		Children: items,
 	}
@@ -133,23 +134,36 @@ func (p parts) legend() core.Node {
 
 func (p parts) markers() []core.Node {
 	out := make([]core.Node, 0, 3)
-	for _, mark := range []*core.Signal[float64]{p.markA, p.markB} {
+	for i, mark := range []*core.Signal[float64]{p.markA, p.markB} {
 		m := mark
+		id := ""
+		if p.c.TestID != "" {
+			id = p.c.TestID + []string{"-mark-a", "-mark-b"}[i]
+		}
 		out = append(out, core.View{
-			Class: p.c.MarkClass,
+			TestID: id,
+			Class:  p.c.MarkClass,
 			Style: core.Style{Position: core.Absolute, Top: core.Pt(0), Bottom: core.Pt(0),
 				Width: core.Pt(1)}.Merge(p.c.MarkStyle),
-			StyleFunc: func() core.Style { return core.Style{Left: p.frac(m.Get())} },
+			StyleFunc: func() core.Style {
+				return core.Style{Left: core.Pct(float32(m.Get() * 100))}
+			},
 		})
 	}
 	out = append(out, core.Text{
 		Class: p.c.MarkClass,
-		Style: core.Style{Position: core.Absolute, Left: core.Pt(axisRoom), Bottom: core.Pt(2)},
+		Style: core.Style{Position: core.Absolute, Left: core.Pt(p.left), Bottom: core.Pt(2)},
 		ContentFunc: func() string {
-			a, b := p.markA.Get(), p.markB.Get()
-			if math.IsNaN(a) || math.IsNaN(b) {
+			fa, fb := p.markA.Get(), p.markB.Get()
+			if math.IsNaN(fa) || math.IsNaN(fb) {
 				return ""
 			}
+			f := p.f.Get()
+			if f == nil {
+				return ""
+			}
+			a := f.vx.Lo + fa*f.vx.Span()
+			b := f.vx.Lo + fb*f.vx.Span()
 			dx := math.Abs(b - a)
 			var reading string
 			if f := p.c.axisAt(0).Format; f != nil {

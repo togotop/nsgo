@@ -226,6 +226,37 @@ func TestTrimDropsOldSamples(t *testing.T) {
 	}
 }
 
+func TestSourceRetainBoundsHistory(t *testing.T) {
+	src := NewSource(0, 0.001)
+	src.Retain(1) // one x unit, 1000 samples
+	for b := range 10 {
+		y := make([]float32, 1000)
+		for i := range y {
+			y[i] = float32(b*1000 + i)
+		}
+		src.Push(y)
+		src.adopt() // as the engine does, without a host
+	}
+	if e := src.d.extent(); e.Span() > 2 {
+		t.Fatalf("history grew past twice the retained span: %v", e)
+	}
+	if n := len(src.d.y); n == 0 || src.d.y[n-1] != 9999 {
+		t.Fatalf("the newest sample was lost: %d samples, last %v", n, src.d.y[n-1])
+	}
+	if len(src.d.py.levels[0]) > 64 {
+		t.Fatalf("the pyramid grew to %d buckets", len(src.d.py.levels[0]))
+	}
+}
+
+func TestSourceWithoutRetainKeepsEverything(t *testing.T) {
+	src := NewSource(0, 1)
+	src.Push(make([]float32, 100))
+	src.adopt()
+	if len(src.d.y) != 100 {
+		t.Fatalf("an unretained Source dropped samples: %d", len(src.d.y))
+	}
+}
+
 func TestValueAt(t *testing.T) {
 	d := columnData(1000)
 	v, ok := d.valueAt(0.5)

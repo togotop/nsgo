@@ -60,6 +60,16 @@ func (in *input) xAt(px float64) float64 {
 
 func (in *input) slop() float64 { return max(in.xView().Span()*0.02, 1e-9) }
 
+// frac is where a data x lies in the view, 0 to 1. Markers are kept as
+// fractions so they hold their place on screen as the window moves.
+func (in *input) frac(x float64) float64 {
+	vx := in.xView()
+	if vx.Span() <= 0 {
+		return 0
+	}
+	return min(max((x-vx.Lo)/vx.Span(), 0), 1)
+}
+
 func (in *input) onMouseMove(e core.MouseEvent) {
 	x := in.xAt(float64(e.Position.X))
 	if in.drag.active {
@@ -68,9 +78,9 @@ func (in *input) onMouseMove(e core.MouseEvent) {
 		case in.drag.pan:
 			in.setView(in.drag.view.PanX(in.drag.fromX - x))
 		case in.drag.marker == 1:
-			in.markA.Set(x)
+			in.markA.Set(in.frac(x))
 		case in.drag.marker == 2:
-			in.markB.Set(x)
+			in.markB.Set(in.frac(x))
 		}
 		return
 	}
@@ -101,10 +111,11 @@ func (in *input) onPressDown(e core.PressEvent) {
 	x := in.xAt(float64(e.Position.X))
 	in.drag = dragState{active: true, pan: e.Modifiers.Shift, fromX: x, toX: x, view: in.ownView()}
 	if in.c.Measure && !in.drag.pan {
+		fx := in.frac(x)
 		switch {
-		case math.Abs(x-in.markA.Get()) < in.slop():
+		case math.Abs(fx-in.markA.Get()) < 0.02:
 			in.drag.marker = 1
-		case math.Abs(x-in.markB.Get()) < in.slop():
+		case math.Abs(fx-in.markB.Get()) < 0.02:
 			in.drag.marker = 2
 		}
 	}

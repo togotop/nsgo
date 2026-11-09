@@ -25,9 +25,11 @@ type Source struct {
 	posted atomic.Bool
 	cx     atomic.Pointer[core.Scope]
 
-	// Engine-only: changed wakes the chart's drawing, d holds the samples.
+	// Engine-only: changed wakes the chart's drawing, d holds the samples,
+	// retain bounds how much x history a following chart keeps.
 	changed *core.Signal[uint64]
 	d       data
+	retain  float64
 }
 
 // NewSource starts a column of samples spaced by dx from x0.
@@ -60,6 +62,16 @@ func (s *Source) Push(y []float32) {
 			// No host yet: attach posts one, and this batch stays queued.
 			s.posted.Store(false)
 		}
+	}
+}
+
+// Retain keeps at most span x units of history, so a chart that follows
+// the newest samples does not grow forever. Call it on the engine; a Chart
+// names a stretch twice its Follow window, leaving room to pan back. Several
+// charts sharing a Source keep the widest stretch any of them asks for.
+func (s *Source) Retain(span float64) {
+	if span > s.retain {
+		s.retain = span
 	}
 }
 
@@ -102,6 +114,14 @@ func (s *Source) adopt() {
 	}
 	for _, y := range columns {
 		s.d.append(y)
+	}
+	// Drop old samples in one stretch, not every frame: trim is O(n), so
+	// waiting until the history is twice what we keep amortizes it to O(1)
+	// a sample while bounding both the column and the pyramid.
+	if s.retain > 0 {
+		if e := s.d.extent(); e.Valid() && e.Span() > 2*s.retain {
+			s.d.trim(e.Hi - s.retain)
+		}
 	}
 	if s.changed != nil {
 		s.changed.Set(s.d.version)

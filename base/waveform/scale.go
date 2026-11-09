@@ -197,7 +197,18 @@ func formatValue(v float64, format func(float64) string) string {
 // visible on it: fixed when the axis says so, fitted and rounded otherwise.
 func fitRange(a Axis, lo, hi float64) Range {
 	if a.Range.Valid() {
-		return a.Range
+		r := a.Range
+		if a.Log {
+			// A log axis cannot show zero or a negative value, so a fixed
+			// range that names one is brought above it.
+			if r.Lo <= 0 {
+				r.Lo = max(r.Hi/1000, 1e-9)
+			}
+			if r.Hi <= r.Lo {
+				r.Hi = r.Lo * 10
+			}
+		}
+		return r
 	}
 	if hi < lo {
 		if a.Log {

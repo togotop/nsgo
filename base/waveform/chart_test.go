@@ -335,6 +335,87 @@ func TestChartGroupSharesTheCursor(t *testing.T) {
 	}
 }
 
+func TestChartSeriesLineWidthFollowsTheView(t *testing.T) {
+	app := nsgotest.Start(t, func(cx *core.Scope) core.Node {
+		return waveform.Chart{
+			TestID: "wave",
+			Series: []waveform.Series{{Y: waveSamples(100), X0: 0, Dx: 0.001,
+				Style: core.Style{StrokeWidth: 4}}},
+			Style: core.Style{Width: core.Pt(600), Height: core.Pt(300)},
+		}
+	}, nsgotest.Size(800, 600))
+	app.Settle()
+	v := app.Find("id:wave-s0")
+	if v.Drawing == nil {
+		t.Fatal("the series drew nothing")
+	}
+	for _, p := range v.Drawing.ViewPaints {
+		if p.Kind == driver.ViewStrokeWidth {
+			return
+		}
+	}
+	t.Fatal("the series' line width is not taken from its view")
+}
+
+func TestChartRightAxisSitsRightOfTheLeft(t *testing.T) {
+	y := waveSamples(1000)
+	app := nsgotest.Start(t, func(cx *core.Scope) core.Node {
+		return waveform.Chart{
+			TestID: "wave",
+			Series: []waveform.Series{
+				{Y: y, X0: 0, Dx: 0.001, Axis: 0, Color: core.RGB(0x1a7f37)},
+				{Y: y, X0: 0, Dx: 0.001, Axis: 1, Color: core.RGB(0xcc3333)},
+			},
+			Axes:  []waveform.Axis{{}, {}},
+			Style: core.Style{Width: core.Pt(600), Height: core.Pt(300)},
+		}
+	}, nsgotest.Size(800, 600))
+	app.Settle()
+	left := app.Find("id:wave-y0-0").Frame.Origin.X
+	right := app.Find("id:wave-y1-0").Frame.Origin.X
+	if right <= left {
+		t.Fatalf("the right axis label at %v is not right of the left one at %v", right, left)
+	}
+}
+
+func TestChartTooltipKeepsItsOffset(t *testing.T) {
+	app := nsgotest.Start(t, func(cx *core.Scope) core.Node {
+		return waveform.Chart{
+			TestID: "wave",
+			Series: []waveform.Series{{Y: waveSamples(10000), X0: 0, Dx: 0.001,
+				Color: core.RGB(0x1a7f37)}},
+			Cursor:        true,
+			Tooltip:       core.View{TestID: "tip", Style: core.Style{Width: core.Pt(60), Height: core.Pt(20)}},
+			TooltipOffset: 8,
+			Style:         core.Style{Width: core.Pt(600), Height: core.Pt(300)},
+		}
+	}, nsgotest.Size(800, 600))
+	app.HoverAt("id:wave", driver.Point{X: 300, Y: 100})
+	app.Settle()
+	cross := app.Find("id:wave-cross").Frame.Origin.X
+	box := app.Find("id:wave-tipbox").Frame.Origin.X
+	if d := box - cross; d < 6 || d > 10 {
+		t.Fatalf("the tooltip is %v from the cross line, want about 8", d)
+	}
+}
+
+func TestChartNotesSitAtTheirX(t *testing.T) {
+	app := nsgotest.Start(t, func(cx *core.Scope) core.Node {
+		return waveform.Chart{
+			TestID: "wave",
+			Series: []waveform.Series{{Y: waveSamples(10000), X0: 0, Dx: 0.001,
+				Color: core.RGB(0x1a7f37)}},
+			Notes: []waveform.Note{{X: 2, Y: 250, Text: "trigger"}},
+			Style: core.Style{Width: core.Pt(600), Height: core.Pt(300)},
+		}
+	}, nsgotest.Size(800, 600))
+	app.Settle()
+	x := app.Find("text:trigger").Frame.Origin.X
+	if x < 80 || x > 140 {
+		t.Fatalf("the note at data x 2 sits at %v, want about 108", x)
+	}
+}
+
 func TestChartLabelsEachYAxis(t *testing.T) {
 	y := waveSamples(10000)
 	app := nsgotest.Start(t, func(cx *core.Scope) core.Node {

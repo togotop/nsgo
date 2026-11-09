@@ -75,6 +75,7 @@ func (p parts) nodes() []core.Node {
 				When: func() bool { return !math.IsNaN(p.cursorX()) },
 				Then: func(*core.Scope) core.Node {
 					return core.View{
+						TestID: derivedID(p.c.TestID, "-tipbox"),
 						Style: core.Style{Position: core.Absolute, Top: core.Pt(0),
 							Animated: &core.AnimatedStyle{Opacity: p.fade}},
 						PointerEvents: core.PointerEventsNone,

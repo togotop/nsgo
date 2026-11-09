@@ -374,15 +374,7 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 			if fs.cfg.Color != 0 {
 				paint = core.PaintColor(fs.cfg.Color)
 			}
-			d.StrokeFromView(paint).LineDashFromView()
-			switch {
-			case fs.cfg.Style.StrokeWidth > 0:
-				d.SetLineWidth(float32(fs.cfg.Style.StrokeWidth))
-			case fs.cfg.Width > 0:
-				d.SetLineWidth(float32(fs.cfg.Width))
-			default:
-				d.SetLineWidth(1.5)
-			}
+			d.StrokeFromView(paint).LineWidthFromView().LineDashFromView()
 			d.Stroke()
 		}
 	}
@@ -425,10 +417,20 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 			continue
 		}
 		s := c.Series[i]
+		// The line's width is the view's StrokeWidth, so a StyleFunc may
+		// change it every commit; Width is its default.
+		st := s.Style
+		if st.StrokeWidth <= 0 {
+			if s.Width > 0 {
+				st.StrokeWidth = s.Width
+			} else {
+				st.StrokeWidth = 1.5
+			}
+		}
 		canvases = append(canvases, core.Canvas{
 			TestID:    derivedID(c.TestID, fmt.Sprintf("-s%d", i)),
 			Class:     s.Class,
-			Style:     fillPlot.Merge(s.Style),
+			Style:     fillPlot.Merge(st),
 			StyleFunc: s.StyleFunc,
 			Draw:      seriesDraw(i),
 		})
@@ -475,6 +477,11 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 	height := c.Height
 	if height <= 0 {
 		height = defaultHeight
+	}
+	// Keep room for the plot itself between the insets, or a very short
+	// chart would give it a negative height.
+	if least := plotTop + bottomRoom + 16; height < least {
+		height = least
 	}
 	root := core.View{
 		Class:        c.Class,

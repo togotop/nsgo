@@ -76,10 +76,13 @@ func (s *Source) Retain(span float64) {
 }
 
 // Reset drops every sample and starts a new column. Call it on the engine.
+// A batch published before the call belongs to the old column and goes
+// with it.
 func (s *Source) Reset(x0, dx float64) {
 	if dx <= 0 {
 		dx = 1
 	}
+	s.head.Swap(nil)
 	s.d.reset(x0, dx)
 	if s.changed != nil {
 		s.changed.Set(s.d.version)

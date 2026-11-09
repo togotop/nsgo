@@ -102,12 +102,16 @@ func columns(sc scan, vx Range, px int, out []float32) []float32 {
 		lowI, highI := i, i
 		lowV, highV := sc.low(i), sc.high(i)
 		j := i + 1
-		for j < to && sc.low(j) == sc.low(j) && col(j) == c {
-			if sc.low(j) < lowV {
-				lowV, lowI = sc.low(j), j
+		for j < to {
+			lj, hj := sc.low(j), sc.high(j)
+			if lj != lj || col(j) != c {
+				break
 			}
-			if sc.high(j) > highV {
-				highV, highI = sc.high(j), j
+			if lj < lowV {
+				lowV, lowI = lj, j
+			}
+			if hj > highV {
+				highV, highI = hj, j
 			}
 			j++
 		}

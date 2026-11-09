@@ -5,6 +5,9 @@
 package waveform
 
 import (
+"strconv"
+	"strings"
+
 	base "github.com/nsgo-dev/nsgo/base/waveform"
 	"github.com/nsgo-dev/nsgo/core"
 	"github.com/nsgo-dev/nsgo/tsx"
@@ -25,6 +28,11 @@ type Chart struct {
 	Names   func() []string
 	Height  func() float64
 	Time    func() bool
+	// XFormat is a template for the x axis' labels: "{v}" becomes the
+	// tick's value, as "T{v} s" does. A Go function of the value would
+	// cross the JS boundary for every tick of every frame, so a TSX app
+	// names its words here instead.
+	XFormat func() string
 	Follow  func() float64
 	Cursor  func() bool
 	Legend  func() bool
@@ -53,6 +61,12 @@ func (c Chart) BaseChart() base.Chart {
 		Class:   c.Class,
 		Style:   c.Style,
 		TestID:  c.TestID,
+	}
+	if c.XFormat != nil {
+		ch.XFormat = func(v float64) string {
+			return strings.ReplaceAll(value(c.XFormat), "{v}",
+				strconv.FormatFloat(v, 'g', 4, 64))
+		}
 	}
 	columns := value(c.Data)
 	names := value(c.Names)

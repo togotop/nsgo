@@ -213,6 +213,7 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 	markA := core.NewSignal(cx, math.NaN())
 	markB := core.NewSignal(cx, math.NaN())
 	yZoom := core.NewSignal(cx, float64(1))
+	focused := core.NewSignal(cx, false)
 
 	xView := func() Range {
 		e := extentOf(states)
@@ -395,6 +396,7 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 	}
 	children = append(children, axisLabels(c, decimated, true, 0, left)...)
 	children = append(children, p.nodes()...)
+	children = append(children, keyBindings(in, focused.Get))
 
 	plotTop := topRoom
 	if c.Legend {
@@ -423,6 +425,8 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 		OnPressDown:  in.onPressDown,
 		OnPressUp:    in.onPressUp,
 		OnPress:      in.onPress,
+		OnFocus:      func() { focused.Set(true) },
+		OnBlur:       func() { focused.Set(false) },
 		OnLayout: func(b core.Bounds) {
 			if c.OnLayout != nil {
 				c.OnLayout(b)
@@ -434,6 +438,13 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 		root.Focusable = func() bool { return true }
 		root.AccessibilityActions = []core.AccessibilityAction{{Name: "increment"}, {Name: "decrement"}}
 		root.OnAccessibilityAction = in.onAccessibilityAction
+	}
+	if c.Note != "" {
+		// Note describes what the chart shows, as "15 s at 1 kHz": it is
+		// the element's value, read by a screen reader with its label.
+		root.AccessibilityValue = func() core.AccessibilityValue {
+			return core.AccessibilityValue{Text: c.Note}
+		}
 	}
 	return root
 }
@@ -457,7 +468,29 @@ func axisLabels(c Chart, f *core.Memo[*frame], x bool, axis int, left core.Point
 		return nil
 	}
 	const slots = 12
-	out := make([]core.Node, 0, slots)
+	out := make([]core.Node, 0, slots+1)
+	if !x {
+		if title := c.axisAt(axis).Title; title != "" {
+			id := ""
+			if c.TestID != "" {
+				id = fmt.Sprintf("%s-y%d-title", c.TestID, axis)
+			}
+			s := core.Style{Position: core.Absolute, Top: core.Pt(2)}
+			if axis == 0 {
+				s.Left = core.Pt(-left)
+				s.Width = core.Pt(left - 8)
+			} else {
+				s.Left = core.Pct(100)
+				s.Margin = core.Edges{Left: core.Points(axis-1)*axisRoom + 4}
+			}
+			out = append(out, core.Text{
+				TestID:  id,
+				Class:   c.AxisClass,
+				Content: title,
+				Style:   s.Merge(c.AxisStyle),
+			})
+		}
+	}
 	for i := range slots {
 		id := ""
 		if c.TestID != "" {

@@ -265,10 +265,66 @@ func TestChartLabelsEachYAxis(t *testing.T) {
 		}
 	}, nsgotest.Size(800, 600))
 	app.Settle()
-	for _, id := range []string{"id:wave-y0-0", "id:wave-y1-0", "id:wave-y2-0"} {
+	for _, id := range []string{"id:wave-y0-0", "id:wave-y1-0", "id:wave-y2-0",
+		"id:wave-y0-title", "id:wave-y1-title", "id:wave-y2-title"} {
 		if !app.Exists(id) {
-			t.Errorf("no label for the y axis %s", id)
+			t.Errorf("no label or title for the y axis %s", id)
 		}
+	}
+}
+
+func TestChartKeysMoveAndClearTheCursor(t *testing.T) {
+	var got []float64
+	src := waveform.NewSource(0, 0.001)
+	src.Push(waveSamples(10000))
+	app := nsgotest.Start(t, func(cx *core.Scope) core.Node {
+		return waveform.Chart{
+			TestID: "wave",
+			Series: []waveform.Series{{Source: src, Color: core.RGB(0x1a7f37)}},
+			Cursor: true,
+			OnCursorChange: func(x float64) { got = append(got, x) },
+			Style:  core.Style{Width: core.Pt(600), Height: core.Pt(300)},
+		}
+	}, nsgotest.Size(800, 600), nsgotest.Environment(driver.Environment{
+		OS: driver.OSMacOS, Idiom: driver.IdiomDesktop, Locale: "en-US", FontScale: 1, PixelRatio: 1}))
+	app.Key("tab")
+	app.Settle()
+	app.Key("right")
+	app.Settle()
+	if len(got) == 0 || math.IsNaN(got[len(got)-1]) {
+		t.Fatalf("Right did not place a cursor: %v", got)
+	}
+	app.Key("home")
+	app.Settle()
+	if last := got[len(got)-1]; last != 0 {
+		t.Fatalf("Home did not take the cursor to the view's start: %v", last)
+	}
+	app.Key("end")
+	app.Settle()
+	if last := got[len(got)-1]; last <= 0 {
+		t.Fatalf("End did not take the cursor to the view's end: %v", last)
+	}
+	app.Key("escape")
+	app.Settle()
+	if last := got[len(got)-1]; !math.IsNaN(last) {
+		t.Fatalf("Escape did not clear the cursor: %v", last)
+	}
+}
+
+func TestChartNoteIsItsAccessibilityValue(t *testing.T) {
+	app := nsgotest.Start(t, func(cx *core.Scope) core.Node {
+		return waveform.Chart{
+			TestID: "wave",
+			Series: []waveform.Series{{Y: waveSamples(1000), X0: 0, Dx: 0.001,
+				Color: core.RGB(0x1a7f37)}},
+			Label: "Channels",
+			Note:  "15 s at 20 kHz",
+			Style: core.Style{Width: core.Pt(600), Height: core.Pt(300)},
+		}
+	}, nsgotest.Size(800, 600))
+	app.Settle()
+	if got := app.Find("id:wave").Props.Value.Text; got != "15 s at 20 kHz" {
+		t.Fatalf("the chart's note was not its accessibility value: %q", got)
 	}
 }
 

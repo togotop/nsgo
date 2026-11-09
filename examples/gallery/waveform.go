@@ -4,10 +4,10 @@ import (
 	"math"
 	"time"
 
-	base "github.com/oneo-me/nsgo/base/waveform"
-	"github.com/oneo-me/nsgo/core"
-	"github.com/oneo-me/nsgo/examples/gallery/locales"
-	uiwave "github.com/oneo-me/nsgo/ui/waveform"
+	base "github.com/nsgo-dev/nsgo/base/waveform"
+	"github.com/nsgo-dev/nsgo/core"
+	"github.com/nsgo-dev/nsgo/examples/gallery/locales"
+	uiwave "github.com/nsgo-dev/nsgo/ui/waveform"
 )
 
 // waveSample is two channels of a 50 Hz tone with higher harmonics, as a

@@ -4,9 +4,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/oneo-me/nsgo/tsx/tsxtest"
-	_ "github.com/oneo-me/nsgo/tsx/ui"     // registers nsgo/ui's styled waveform
-	_ "github.com/oneo-me/nsgo/tsx/waveform" // registers nsgo/base's waveform
+	"github.com/nsgo-dev/nsgo/tsx/tsxtest"
+	_ "github.com/nsgo-dev/nsgo/tsx/ui"     // registers nsgo/ui's styled waveform
+	_ "github.com/nsgo-dev/nsgo/tsx/waveform" // registers nsgo/base's waveform
 )
 
 // TestWaveformTSX runs the TSX tests beside this file: a TSX app mounts the

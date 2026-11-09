@@ -87,6 +87,12 @@ func (in *input) onMouseMove(e core.MouseEvent) {
 	if e.PressedButton != core.MouseButtonNone || (!in.c.Cursor && !in.c.Measure) {
 		return
 	}
+	in.setCursor(x)
+}
+
+// setCursor and clearCursor are the one path every input takes to the
+// cursor: the pointer, the keys and the screen reader's actions alike.
+func (in *input) setCursor(x float64) {
 	in.hover.Set(x)
 	in.fade.Set(1)
 	in.c.Sync.setCursor(x)
@@ -95,16 +101,54 @@ func (in *input) onMouseMove(e core.MouseEvent) {
 	}
 }
 
-func (in *input) onMouseLeave(core.MouseEvent) {
-	if in.drag.active {
-		return
-	}
+func (in *input) clearCursor() {
 	in.hover.Set(math.NaN())
 	in.fade.Set(0)
 	in.c.Sync.setCursor(math.NaN())
 	if in.c.OnCursorChange != nil {
 		in.c.OnCursorChange(math.NaN())
 	}
+}
+
+// cursorStep moves the cursor by a twentieth of the view; cursorEnd takes
+// it to either end. Without a cursor the first key starts in the middle.
+func (in *input) cursorStep(dir int) {
+	vx := in.xView()
+	x := in.hover.Get()
+	if math.IsNaN(x) {
+		x = vx.Lo + vx.Span()/2
+	}
+	in.setCursor(min(max(x+float64(dir)*vx.Span()/20, vx.Lo), vx.Hi))
+}
+
+func (in *input) cursorEnd(first bool) {
+	vx := in.xView()
+	if first {
+		in.setCursor(vx.Lo)
+	} else {
+		in.setCursor(vx.Hi)
+	}
+}
+
+// keyBindings binds the chart's keys while it has the focus, as base/plot's
+// keys do: Left and Right step the cursor, Home and End take it to the
+// view's ends, Escape clears it.
+func keyBindings(in *input, focused func() bool) core.Node {
+	return core.Show{When: focused, Then: func(cx *core.Scope) core.Node {
+		cx.OnKeyWith("left", core.KeyOptions{Repeat: true}, func() { in.cursorStep(-1) })
+		cx.OnKeyWith("right", core.KeyOptions{Repeat: true}, func() { in.cursorStep(1) })
+		cx.OnKey("home", func() { in.cursorEnd(true) })
+		cx.OnKey("end", func() { in.cursorEnd(false) })
+		cx.OnKey("escape", in.clearCursor)
+		return nil
+	}}
+}
+
+func (in *input) onMouseLeave(core.MouseEvent) {
+	if in.drag.active {
+		return
+	}
+	in.clearCursor()
 }
 
 func (in *input) onPressDown(e core.PressEvent) {
@@ -190,10 +234,5 @@ func (in *input) onAccessibilityAction(name string) {
 		return
 	}
 	x = min(max(x, vx.Lo), vx.Hi)
-	in.hover.Set(x)
-	in.fade.Set(1)
-	in.c.Sync.setCursor(x)
-	if in.c.OnCursorChange != nil {
-		in.c.OnCursorChange(x)
-	}
+	in.setCursor(x)
 }

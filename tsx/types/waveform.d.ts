@@ -12,6 +12,8 @@ export interface WaveformProps {
   height?: number;
   /** x is Unix seconds; the x axis picks round time intervals. */
   time?: boolean;
+  /** A template for the x axis' labels: "{v}" becomes the tick's value. */
+  xFormat?: Accessor<string> | string;
   /** Pin the view to the newest samples, a stretch of follow x units. */
   follow?: number;
   cursor?: boolean;

@@ -13,7 +13,6 @@ type dragState struct {
 	pan    bool
 	marker int // 0: none, 1: A, 2: B
 	fromX  float64
-	toX    float64
 	view   Viewport
 }
 
@@ -73,7 +72,6 @@ func (in *input) frac(x float64) float64 {
 func (in *input) onMouseMove(e core.MouseEvent) {
 	x := in.xAt(float64(e.Position.X))
 	if in.drag.active {
-		in.drag.toX = x
 		switch {
 		case in.drag.pan:
 			in.setView(in.drag.view.PanX(in.drag.fromX - x))
@@ -153,7 +151,7 @@ func (in *input) onMouseLeave(core.MouseEvent) {
 
 func (in *input) onPressDown(e core.PressEvent) {
 	x := in.xAt(float64(e.Position.X))
-	in.drag = dragState{active: true, pan: e.Modifiers.Shift, fromX: x, toX: x, view: in.ownView()}
+	in.drag = dragState{active: true, pan: e.Modifiers.Shift, fromX: x, view: in.ownView()}
 	if in.c.Measure && !in.drag.pan {
 		fx := in.frac(x)
 		switch {

@@ -11,14 +11,13 @@ import (
 // itself is in a canvas; everything that follows the pointer or a marker
 // is a view, so moving it never records the waveform again.
 type parts struct {
-	c              Chart
-	f              *core.Memo[*frame]
-	hover          *core.Signal[float64]
-	fade           *core.AnimatedValue
-	markA, markB   *core.Signal[float64]
-	states         []*seriesState
-	plotSize       *core.Signal[core.Size]
-	left           core.Points
+	c            Chart
+	f            *core.Memo[*frame]
+	hover        *core.Signal[float64]
+	fade         *core.AnimatedValue
+	markA, markB *core.Signal[float64]
+	states       []*seriesState
+	plotSize     *core.Signal[core.Size]
 }
 
 // cursorX is the data x under this chart's pointer, or the group's cursor
@@ -31,21 +30,12 @@ func (p parts) cursorX() float64 {
 	return p.c.Sync.cursorOf()
 }
 
-func (p parts) cursorFrac() float32 {
-	f := p.f.Get()
-	x := p.cursorX()
-	if f == nil || math.IsNaN(x) || f.vx.Span() <= 0 {
-		return 0
-	}
-	return float32((x - f.vx.Lo) / f.vx.Span())
-}
-
 func (p parts) frac(x float64) core.Length {
 	f := p.f.Get()
 	if f == nil || f.vx.Span() <= 0 {
 		return core.Pct(0)
 	}
-	return core.Pct(float32((x-f.vx.Lo)/f.vx.Span()*100))
+	return core.Pct(float32((x - f.vx.Lo) / f.vx.Span() * 100))
 }
 
 // valueText is a series' reading at x, or its newest sample without a
@@ -71,7 +61,8 @@ func (p parts) nodes() []core.Node {
 			When: func() bool { return !math.IsNaN(p.cursorX()) },
 			Then: func(*core.Scope) core.Node {
 				return core.View{
-					Class: p.c.CrossLineClass,
+					TestID: derivedID(p.c.TestID, "-cross"),
+					Class:  p.c.CrossLineClass,
 					Style: core.Style{Position: core.Absolute, Top: core.Pt(0), Bottom: core.Pt(0),
 						Width: core.Pt(1), Animated: &core.AnimatedStyle{Opacity: p.fade}}.Merge(p.c.CrossLineStyle),
 					StyleFunc:     func() core.Style { return core.Style{Left: p.frac(p.cursorX())} },
@@ -126,7 +117,7 @@ func (p parts) legend() core.Node {
 	}
 	return core.View{
 		Class: p.c.LegendClass,
-		Style: core.Style{Position: core.Absolute, Left: core.Pt(p.left), Top: core.Pt(2),
+		Style: core.Style{Position: core.Absolute, Left: core.Pt(0), Top: core.Pt(2),
 			Right: core.Pt(rightRoom), Direction: core.Row, Gap: 16}.Merge(p.c.LegendStyle),
 		Children: items,
 	}
@@ -152,7 +143,7 @@ func (p parts) markers() []core.Node {
 	}
 	out = append(out, core.Text{
 		Class: p.c.MarkClass,
-		Style: core.Style{Position: core.Absolute, Left: core.Pt(p.left), Bottom: core.Pt(2)},
+		Style: core.Style{Position: core.Absolute, Left: core.Pt(0), Bottom: core.Pt(2)},
 		ContentFunc: func() string {
 			fa, fb := p.markA.Get(), p.markB.Get()
 			if math.IsNaN(fa) || math.IsNaN(fb) {

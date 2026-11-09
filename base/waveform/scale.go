@@ -222,6 +222,6 @@ func fitRange(a Axis, lo, hi float64) Range {
 		span = math.Abs(hi)*0.04 + 1e-9
 	}
 	step := niceStep(span*1.08, 4)
-	return Range{math.Floor((lo - 0.04*span) / step) * step,
-		math.Ceil((hi + 0.04*span) / step) * step}
+	return Range{math.Floor((lo-0.04*span)/step) * step,
+		math.Ceil((hi+0.04*span)/step) * step}
 }

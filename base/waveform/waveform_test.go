@@ -156,10 +156,19 @@ func TestNaNsBreakTheLine(t *testing.T) {
 	d.append(y)
 	vx := d.extent()
 	pts := columns(d.scanFor(vx, 100), vx, 100, nil)
-	for i := 1; i < len(pts); i += 2 {
-		if pts[i] != pts[i] {
-			t.Fatal("a NaN reached the points")
+	// The finite runs, split by the NaN pair a break writes.
+	runs, inRun := 0, false
+	for i := 0; i+1 < len(pts); i += 2 {
+		finite := pts[i] == pts[i] && pts[i+1] == pts[i+1]
+		switch {
+		case finite && !inRun:
+			runs, inRun = runs+1, true
+		case !finite:
+			inRun = false
 		}
+	}
+	if runs != 2 {
+		t.Fatalf("a NaN stretch split the line into %d runs, want 2", runs)
 	}
 }
 
@@ -254,6 +263,33 @@ func TestSourceWithoutRetainKeepsEverything(t *testing.T) {
 	src.adopt()
 	if len(src.d.y) != 100 {
 		t.Fatalf("an unretained Source dropped samples: %d", len(src.d.y))
+	}
+}
+
+func TestSeriesHeadRotatesTheRing(t *testing.T) {
+	c := Chart{Series: []Series{{Y: []float32{1, 2, 3, 4}, X0: 0, Dx: 1, Head: 2}}}
+	got := c.states()[0].d.y
+	if len(got) != 4 || got[0] != 3 || got[1] != 4 || got[2] != 1 || got[3] != 2 {
+		t.Fatalf("the ring rotated to %v", got)
+	}
+}
+
+func TestSourceResetStartsANewColumn(t *testing.T) {
+	src := NewSource(1, 0.5)
+	src.Push(make([]float32, 10))
+	src.adopt()
+	src.Reset(5, 0.25)
+	if len(src.d.y) != 0 || src.d.x0 != 5 || src.d.dx != 0.25 {
+		t.Fatalf("reset left %d samples at x0 %v dx %v", len(src.d.y), src.d.x0, src.d.dx)
+	}
+}
+
+func TestSourceRetainKeepsTheWidest(t *testing.T) {
+	src := NewSource(0, 1)
+	src.Retain(2)
+	src.Retain(1)
+	if src.retain != 2 {
+		t.Fatalf("retain became %v, want the widest 2", src.retain)
 	}
 }
 

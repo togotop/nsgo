@@ -8,15 +8,24 @@ import (
 	"github.com/nsgo-dev/nsgo/core"
 )
 
-// WaveformVariant is a Waveform's look: what colors its grid.
+// WaveformVariant is a Waveform's look: the color of its grid.
 type WaveformVariant uint8
 
 const (
-	// WaveformNeutral grids with the theme's border. It is the default.
+	// WaveformNeutral grids in a neutral gray. It is the default.
 	WaveformNeutral WaveformVariant = iota
-	// WaveformAccent grids with the accent, for a chart that stands out.
+	// WaveformAccent grids in the accent, for a chart that stands out.
 	WaveformAccent
 )
+
+// grid is the color the variant draws its grid in, the same in every theme
+// so a switch of appearance never records the waveform again.
+func (v WaveformVariant) grid() core.Color {
+	if v == WaveformAccent {
+		return core.RGBA(0x288cf0, 0.45)
+	}
+	return core.RGBA(0x888888, 0.35)
+}
 
 // seriesColors color the series that have no color of their own, all opaque:
 // a translucent line falls back to a slower drawing path.
@@ -37,8 +46,11 @@ type Waveform struct {
 // line and markers are faint enough for both. Text takes the inherited
 // color, so a switch of appearance restyles it in place without recording
 // the waveform or rebuilding a view.
-func (w Waveform) Render(cx *core.Scope) core.Node {
+func (w Waveform) Render(*core.Scope) core.Node {
 	c := w.Chart
+	if c.GridColor == 0 {
+		c.GridColor = w.Variant.grid()
+	}
 	c.AxisStyle = core.Style{FontSize: 11}.Merge(c.AxisStyle)
 	c.LegendStyle = core.Style{FontSize: 11}.Merge(c.LegendStyle)
 	cross := core.RGBA(0x888888, 0.45)

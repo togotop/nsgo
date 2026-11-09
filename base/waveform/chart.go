@@ -34,19 +34,21 @@ type Chart struct {
 	// compactly; a Time chart's app gives the words for a date or a time.
 	XFormat func(float64) string
 	Follow  float64
-	View    Viewport
-	Sync    *Group
+	// View is where the chart starts. A zoom or a pan the user makes
+	// stays in the component: an app hears it with OnViewChange but
+	// cannot set it back into a running chart.
+	View Viewport
+	Sync *Group
 
-	Cursor bool
-	Legend bool
+	Cursor  bool
+	Legend  bool
 	Measure bool
-	Label  string
-	Note   string
+	Label   string
+	Note    string
 
 	Class          string
 	Style          core.Style
 	GridClass      string
-	GridStyle      core.Style
 	GridColor      core.Color
 	LegendClass    string
 	LegendStyle    core.Style
@@ -258,7 +260,10 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 		for k := range lo {
 			lo[k], hi[k] = math.Inf(1), math.Inf(-1)
 		}
-		for _, st := range states {
+		// One entry per Chart.Series, so a series' canvas reads its own by
+		// index; a hidden one keeps its place with no points.
+		f.series = make([]frameSeries, len(states))
+		for idx, st := range states {
 			if st.cfg.Hidden || st.d == nil {
 				continue
 			}
@@ -266,7 +271,7 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 			key := geomKey{lo: vx.Lo, hi: vx.Hi, px: px, version: st.d.version,
 				n: len(st.d.y), x0: st.d.x0, dx: st.d.dx}
 			pts := st.g.get(key, sc, vx, px)
-			f.series = append(f.series, frameSeries{pts: pts, cfg: st.cfg, axis: st.axis})
+			f.series[idx] = frameSeries{pts: pts, cfg: st.cfg, axis: st.axis}
 			for i := 0; i+1 < len(pts); i += 2 {
 				if pts[i] < 0 || pts[i] > float32(px) {
 					continue
@@ -296,16 +301,22 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 		return f
 	})
 
-	draw := func(d *core.Drawing, s core.Size) {
+	// The plot's layers, bottom to top: one canvas for the grid and the
+	// bands, one per series, and one for the notes. A series' canvas takes
+	// its Class, Style and StyleFunc, so the app styles that line as any
+	// other part, as base/plot's marks do.
+	baseDraw := func(d *core.Drawing, s core.Size) {
 		f := decimated.Get()
 		if f == nil {
 			return
 		}
 		w, h := float32(s.Width), float32(s.Height)
-		d.SetStrokeColor(c.gridPaint()).SetLineWidth(1)
-		for _, t := range f.ticksY[0] {
-			y := h - float32(t.At)*h
-			d.BeginPath().MoveTo(0, y).LineTo(w, y).Stroke()
+		if len(f.ticksY) > 0 {
+			d.SetStrokeColor(c.gridPaint()).SetLineWidth(1)
+			for _, t := range f.ticksY[0] {
+				y := h - float32(t.At)*h
+				d.BeginPath().MoveTo(0, y).LineTo(w, y).Stroke()
+			}
 		}
 		for _, b := range c.Bands {
 			a := b.Axis
@@ -320,33 +331,68 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 			}
 			d.SetFillColor(color).FillRect(0, min(top, bottom), w, float32(math.Abs(float64(bottom-top))))
 		}
-		for _, fs := range f.series {
+	}
+
+	seriesDraw := func(idx int) func(*core.Drawing, core.Size) {
+		return func(d *core.Drawing, s core.Size) {
+			f := decimated.Get()
+			if f == nil || idx >= len(f.series) {
+				return
+			}
+			fs := f.series[idx]
 			pts := fs.pts
 			if len(pts) < 2 {
-				continue
+				return
 			}
+			h := float32(s.Height)
 			r, log := f.ranges[fs.axis], f.logs[fs.axis]
 			if fs.cfg.Fill != 0 {
-				d.BeginPath().MoveTo(pts[0], h)
-				for i := 0; i+1 < len(pts); i += 2 {
-					d.LineTo(pts[i], yOf(pts[i+1], r, h, log))
+				d.BeginPath()
+				segments(pts, func(seg []float32) {
+					if len(seg) < 2 {
+						return
+					}
+					d.MoveTo(seg[0], h)
+					for i := 0; i+1 < len(seg); i += 2 {
+						d.LineTo(seg[i], yOf(seg[i+1], r, h, log))
+					}
+					d.LineTo(seg[len(seg)-2], h).ClosePath()
+				})
+				d.SetFillColor(fs.cfg.Fill).Fill()
+			}
+			d.BeginPath()
+			segments(pts, func(seg []float32) {
+				if len(seg) < 2 {
+					return
 				}
-				d.LineTo(pts[len(pts)-2], h).ClosePath().SetFillColor(fs.cfg.Fill).Fill()
-			}
-			d.BeginPath().MoveTo(pts[0], yOf(pts[1], r, h, log))
-			for i := 2; i+1 < len(pts); i += 2 {
-				d.LineTo(pts[i], yOf(pts[i+1], r, h, log))
-			}
-			width := float32(fs.cfg.Width)
-			if width <= 0 {
-				width = 1.5
-			}
+				d.MoveTo(seg[0], yOf(seg[1], r, h, log))
+				for i := 2; i+1 < len(seg); i += 2 {
+					d.LineTo(seg[i], yOf(seg[i+1], r, h, log))
+				}
+			})
+			paint := core.PaintCurrentColor
 			if fs.cfg.Color != 0 {
-				d.SetStrokeColor(fs.cfg.Color).SetLineWidth(width).Stroke()
-			} else {
-				d.StrokeFromView(core.PaintCurrentColor).SetLineWidth(width).Stroke()
+				paint = core.PaintColor(fs.cfg.Color)
 			}
+			d.StrokeFromView(paint).LineDashFromView()
+			switch {
+			case fs.cfg.Style.StrokeWidth > 0:
+				d.SetLineWidth(float32(fs.cfg.Style.StrokeWidth))
+			case fs.cfg.Width > 0:
+				d.SetLineWidth(float32(fs.cfg.Width))
+			default:
+				d.SetLineWidth(1.5)
+			}
+			d.Stroke()
 		}
+	}
+
+	notesDraw := func(d *core.Drawing, s core.Size) {
+		f := decimated.Get()
+		if f == nil {
+			return
+		}
+		h := float32(s.Height)
 		for _, n := range c.Notes {
 			col := (n.X - f.vx.Lo) / f.vx.Span() * float64(f.px)
 			if col < 0 || col > float64(f.px) {
@@ -365,14 +411,33 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 		}
 	}
 
-	canvas := core.Canvas{
-		Class: c.GridClass,
-		Style: core.Style{Position: core.Absolute, Left: core.Pt(0), Top: core.Pt(0),
-			Right: core.Pt(0), Bottom: core.Pt(0)},
+	fillPlot := core.Style{Position: core.Absolute, Left: core.Pt(0), Top: core.Pt(0),
+		Right: core.Pt(0), Bottom: core.Pt(0)}
+	canvases := []core.Node{core.Canvas{
+		TestID:   derivedID(c.TestID, "-grid"),
+		Class:    c.GridClass,
+		Style:    fillPlot,
 		OnLayout: func(b core.Bounds) { plotSize.Set(b.Size) },
-		Draw:     draw,
+		Draw:     baseDraw,
+	}}
+	for i := range c.Series {
+		if c.Series[i].Hidden {
+			continue
+		}
+		s := c.Series[i]
+		canvases = append(canvases, core.Canvas{
+			TestID:    derivedID(c.TestID, fmt.Sprintf("-s%d", i)),
+			Class:     s.Class,
+			Style:     fillPlot.Merge(s.Style),
+			StyleFunc: s.StyleFunc,
+			Draw:      seriesDraw(i),
+		})
 	}
-
+	canvases = append(canvases, core.Canvas{
+		TestID: derivedID(c.TestID, "-notes"),
+		Style:  fillPlot,
+		Draw:   notesDraw,
+	})
 	if c.Measure {
 		// The markers are fractions of the view, not data x: they hold
 		// their place on screen as a following window slides, and a zoom
@@ -388,8 +453,8 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 
 	left, right := c.plotInsets()
 	p := parts{c: c, f: decimated, hover: hover, fade: fade, markA: markA, markB: markB,
-		states: states, plotSize: plotSize, left: left}
-	children := []core.Node{canvas}
+		states: states, plotSize: plotSize}
+	children := canvases
 	children = append(children, axisLabels(c, decimated, false, 0, left)...)
 	for k := 1; k < c.axisCount(); k++ {
 		children = append(children, axisLabels(c, decimated, false, k, left)...)
@@ -447,6 +512,15 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 		}
 	}
 	return root
+}
+
+// derivedID is a test ID's part, such as its grid's canvas or a series',
+// or empty without a chart ID.
+func derivedID(base, suffix string) string {
+	if base == "" {
+		return ""
+	}
+	return base + suffix
 }
 
 // axisLabels builds the tick labels of one axis: the bottom x axis when x

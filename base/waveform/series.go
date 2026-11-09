@@ -11,6 +11,9 @@ import (
 // X0/Dx (uniform) or X (irregular, ascending). Head rotates a static Y as
 // a ring: sample i sits at Y[(Head+i)%len(Y)].
 //
+// Y and X are read when the chart mounts: to change what a running chart
+// shows, push to a Source instead of rewriting a column.
+//
 // Axis names the index into Chart.Axes the values are measured on. Color,
 // Width and Fill are shortcuts; Class, Style and StyleFunc style the line
 // as any other part, and win over them.
@@ -23,9 +26,9 @@ type Series struct {
 	Head   int
 	Axis   int
 
-	Color core.Color
-	Width core.Points
-	Fill  core.Color
+	Color  core.Color
+	Width  core.Points
+	Fill   core.Color
 	Hidden bool
 
 	Class     string

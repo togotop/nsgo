@@ -82,10 +82,21 @@ func columns(sc scan, vx Range, px int, out []float32) []float32 {
 	to := min(sc.n, sc.indexAt(vx.Hi)+1)
 	scale := float64(px) / vx.Span()
 	col := func(i int) int { return int(math.Floor((sc.x(i) - vx.Lo) * scale)) }
+	// A NaN item opens a break; the next finite column writes a NaN pair
+	// into the output, which the drawing reads as the start of a new
+	// segment, so a gap in the data is a gap in the line.
+	broken := false
 	for i := from; i < to; {
-		if sc.low(i) != sc.low(i) { // NaN breaks the line
+		if sc.low(i) != sc.low(i) {
+			broken = true
 			i++
 			continue
+		}
+		if broken {
+			if len(out) > 0 {
+				out = append(out, nan, nan)
+			}
+			broken = false
 		}
 		c := col(i)
 		lowI, highI := i, i
@@ -111,6 +122,24 @@ func columns(sc scan, vx Range, px int, out []float32) []float32 {
 		i = j
 	}
 	return out
+}
+
+// segments calls fn for each run of finite points in pts, flat x,y pairs.
+// A NaN pair separates two runs, so a break in the data breaks the line
+// and the area under it.
+func segments(pts []float32, fn func(seg []float32)) {
+	for i := 0; i+1 < len(pts); {
+		if pts[i] != pts[i] {
+			i += 2
+			continue
+		}
+		j := i + 2
+		for j+1 < len(pts) && pts[j] == pts[j] {
+			j += 2
+		}
+		fn(pts[i:j])
+		i = j
+	}
 }
 
 // geomKey says when a series' columns have to be reduced again: a new

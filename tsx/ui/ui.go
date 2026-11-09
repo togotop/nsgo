@@ -17,15 +17,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nsgo-dev/nsgo/base"
+"github.com/nsgo-dev/nsgo/base"
 	"github.com/nsgo-dev/nsgo/core"
 	"github.com/nsgo-dev/nsgo/tsx"
 	tsxdiff "github.com/nsgo-dev/nsgo/tsx/diff"
 	tsxtextview "github.com/nsgo-dev/nsgo/tsx/textview"
+	tsxwave "github.com/nsgo-dev/nsgo/tsx/waveform"
 	"github.com/nsgo-dev/nsgo/ui"
 	"github.com/nsgo-dev/nsgo/ui/commitgraph"
 	uidiff "github.com/nsgo-dev/nsgo/ui/diff"
 	uiflow "github.com/nsgo-dev/nsgo/ui/flow"
+	uiwave "github.com/nsgo-dev/nsgo/ui/waveform"
 )
 
 const module = "nsgo/ui"
@@ -193,6 +195,23 @@ func init() {
 	tsx.Register(module, map[string]core.Node{"Tree": Tree{}}, options(tsx.Event("OnSelectedChange", "selected"), tsx.Event("OnActivate", "id"))...)
 	tsx.Register(module, map[string]core.Node{"Toasts": Toasts{}}, options()...)
 	tsx.Register(module, map[string]core.Node{"TabShell": TabShell{}}, options(tsx.Event("OnChange", "index"))...)
+	tsx.Register(module, map[string]core.Node{"Waveform": Waveform{}}, options()...)
+}
+
+// Waveform is ui.Waveform with base/waveform.Chart's props as TSX reads
+// them, and a Variant the app names. Its base form is tsx/waveform's.
+type Waveform struct {
+	tsxwave.Chart
+	Variant func() string
+}
+
+// Render implements core.Node.
+func (w Waveform) Render(*core.Scope) core.Node {
+	v := uiwave.WaveformNeutral
+	if w.Variant != nil && w.Variant() == "accent" {
+		v = uiwave.WaveformAccent
+	}
+	return uiwave.Waveform{Chart: w.BaseChart(), Variant: v}
 }
 
 // Icon draws Name, Size points square in Color, the text's when nil.

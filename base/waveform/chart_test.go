@@ -1,0 +1,228 @@
+package waveform_test
+
+import (
+	"math"
+	"testing"
+
+	"github.com/nsgo-dev/nsgo/base/waveform"
+	"github.com/nsgo-dev/nsgo/core"
+	"github.com/nsgo-dev/nsgo/internal/driver"
+	"github.com/nsgo-dev/nsgo/nsgotest"
+)
+
+func waveSamples(n int) []float32 {
+	y := make([]float32, n)
+	for i := range y {
+		y[i] = float32(200 + 110*math.Sin(float64(i)/37) + 45*math.Sin(float64(i)/3.1))
+	}
+	return y
+}
+
+func canvases(app *nsgotest.App, selector string) []*nsgotest.View {
+	var out []*nsgotest.View
+	var walk func(*nsgotest.View)
+	walk = func(v *nsgotest.View) {
+		if v == nil {
+			return
+		}
+		if v.Kind == driver.KindCanvas {
+			out = append(out, v)
+		}
+		for _, c := range v.Children {
+			walk(c)
+		}
+	}
+	walk(app.Find(selector))
+	return out
+}
+
+func startChart(t *testing.T, src *waveform.Source, n int) (*nsgotest.App, []*nsgotest.View) {
+	t.Helper()
+	if src != nil {
+		src.Push(waveSamples(n))
+	}
+	app := nsgotest.Start(t, func(cx *core.Scope) core.Node {
+		return waveform.Chart{
+			TestID: "wave",
+			Series: []waveform.Series{{Source: src, Color: core.RGB(0x1a7f37)}},
+			Style:  core.Style{Width: core.Pt(600), Height: core.Pt(300)},
+		}
+	}, nsgotest.Size(800, 600))
+	app.Settle()
+	return app, canvases(app, "id:wave")
+}
+
+func TestChartDrawsDecimatedLine(t *testing.T) {
+	_, cs := startChart(t, waveform.NewSource(0, 0.001), 100000)
+	if len(cs) == 0 {
+		t.Fatal("a Chart mounted no canvas")
+	}
+	ops := len(cs[0].Ops)
+	if ops < 10 {
+		t.Fatalf("the canvas drew %d ops, want a line", ops)
+	}
+	if ops > 3000 {
+		t.Fatalf("the canvas drew %d ops, want about twice the plot's width", ops)
+	}
+}
+
+func TestChartOpsDoNotGrowWithSamples(t *testing.T) {
+	var first int
+	for _, n := range []int{100000, 1000000} {
+		_, cs := startChart(t, waveform.NewSource(0, 0.001), n)
+		if len(cs) == 0 {
+			t.Fatalf("%d samples: no canvas", n)
+		}
+		ops := len(cs[0].Ops)
+		if ops > 3000 {
+			t.Fatalf("%d samples: %d ops, want about twice the width", n, ops)
+		}
+		if first == 0 {
+			first = ops
+		} else if ops > first*2 {
+			t.Fatalf("%d samples: %d ops against %d at 100k, not O(width)", n, ops, first)
+		}
+	}
+}
+
+func TestSourcePushFromAnotherGoroutine(t *testing.T) {
+	src := waveform.NewSource(0, 0.001)
+	app := nsgotest.Start(t, func(cx *core.Scope) core.Node {
+		return waveform.Chart{
+			TestID: "wave",
+			Series: []waveform.Series{{Source: src, Color: core.RGB(0x1a7f37)}},
+			Style:  core.Style{Width: core.Pt(600), Height: core.Pt(300)},
+		}
+	}, nsgotest.Size(800, 600))
+	done := make(chan struct{})
+	go func() {
+		src.Push(waveSamples(100000))
+		close(done)
+	}()
+	<-done
+	app.Settle()
+	cs := canvases(app, "id:wave")
+	if len(cs) == 0 || len(cs[0].Ops) < 10 {
+		t.Fatal("a push from another goroutine never reached the drawing")
+	}
+}
+
+func TestChartCursorReportsTheDataX(t *testing.T) {
+	var got []float64
+	src := waveform.NewSource(0, 0.001)
+	src.Push(waveSamples(10000))
+	app := nsgotest.Start(t, func(cx *core.Scope) core.Node {
+		return waveform.Chart{
+			TestID: "wave",
+			Series: []waveform.Series{{Source: src, Color: core.RGB(0x1a7f37)}},
+			Cursor: true,
+			OnCursorChange: func(x float64) { got = append(got, x) },
+			Style:  core.Style{Width: core.Pt(600), Height: core.Pt(300)},
+		}
+	}, nsgotest.Size(800, 600))
+	app.HoverAt("id:wave", driver.Point{X: 300, Y: 100})
+	app.Settle()
+	if len(got) == 0 || math.IsNaN(got[len(got)-1]) {
+		t.Fatalf("the cursor reported no data x: %v", got)
+	}
+	app.HoverOut()
+	app.Settle()
+	if last := got[len(got)-1]; !math.IsNaN(last) {
+		t.Fatalf("leaving the chart did not clear the cursor: %v", last)
+	}
+}
+
+func TestChartWheelZoomReportsTheView(t *testing.T) {
+	var views []waveform.Viewport
+	src := waveform.NewSource(0, 0.001)
+	src.Push(waveSamples(10000))
+	app := nsgotest.Start(t, func(cx *core.Scope) core.Node {
+		return waveform.Chart{
+			TestID: "wave",
+			Series: []waveform.Series{{Source: src, Color: core.RGB(0x1a7f37)}},
+			OnViewChange: func(v waveform.Viewport) { views = append(views, v) },
+			Style:        core.Style{Width: core.Pt(600), Height: core.Pt(300)},
+		}
+	}, nsgotest.Size(800, 600))
+	app.Settle()
+	before := len(views)
+	app.Wheel("id:wave", driver.Point{Y: -100}, driver.Modifiers{Control: true})
+	app.Settle()
+	if len(views) <= before || !views[len(views)-1].X.Valid() {
+		t.Fatalf("a wheel zoom did not report a view: %v", views)
+	}
+}
+
+func TestChartGroupSharesTheView(t *testing.T) {
+	g := &waveform.Group{}
+	var bottomViews []waveform.Viewport
+	src := waveform.NewSource(0, 0.001)
+	src.Push(waveSamples(10000))
+	chart := func(id string, onChange func(waveform.Viewport)) core.Node {
+		return waveform.Chart{
+			TestID:        id,
+			Sync:          g,
+			Series:        []waveform.Series{{Source: src, Color: core.RGB(0x1a7f37)}},
+			OnViewChange:  onChange,
+			Style:         core.Style{Width: core.Pt(600), Height: core.Pt(200)},
+		}
+	}
+	app := nsgotest.Start(t, func(cx *core.Scope) core.Node {
+		return core.View{Children: []core.Node{
+			chart("top", nil),
+			chart("bottom", func(v waveform.Viewport) { bottomViews = append(bottomViews, v) }),
+		}}
+	}, nsgotest.Size(800, 600))
+	app.Settle()
+	before := len(bottomViews)
+	app.Wheel("id:top", driver.Point{Y: -100}, driver.Modifiers{Control: true})
+	app.Settle()
+	if len(bottomViews) <= before {
+		t.Fatal("a zoom in one chart did not reach the other of the group")
+	}
+	for _, v := range bottomViews[before:] {
+		if v.X.Valid() {
+			return
+		}
+	}
+	t.Fatal("the group's new view was empty")
+}
+
+func TestChartLegendNotesAndBands(t *testing.T) {
+	src := waveform.NewSource(0, 0.001)
+	src.Push(waveSamples(10000))
+	app := nsgotest.Start(t, func(cx *core.Scope) core.Node {
+		return waveform.Chart{
+			TestID: "wave",
+			Series: []waveform.Series{{Source: src, Name: "CH1", Color: core.RGB(0x1a7f37)}},
+			Legend: true,
+			Notes:  []waveform.Note{{X: 2, Y: 250, Text: "trigger"}},
+			Bands:  []waveform.Band{{Lo: 100, Hi: 300, Label: "safe"}},
+			Style:  core.Style{Width: core.Pt(600), Height: core.Pt(300)},
+		}
+	}, nsgotest.Size(800, 600))
+	app.Settle()
+	for _, text := range []string{"text:CH1", "text:trigger", "text:safe"} {
+		if !app.Exists(text) {
+			t.Errorf("no view shows %q", text)
+		}
+	}
+}
+
+func TestChartFollowPinsNewestSamples(t *testing.T) {
+	src := waveform.NewSource(0, 0.001)
+	src.Push(waveSamples(100000))
+	app := nsgotest.Start(t, func(cx *core.Scope) core.Node {
+		return waveform.Chart{
+			TestID: "wave",
+			Series: []waveform.Series{{Source: src, Color: core.RGB(0x1a7f37)}},
+			Follow: 1, // one x unit, a tenth of the column
+			Style:  core.Style{Width: core.Pt(600), Height: core.Pt(300)},
+		}
+	}, nsgotest.Size(800, 600))
+	app.Settle()
+	cs := canvases(app, "id:wave")
+	if len(cs) == 0 || len(cs[0].Ops) < 10 {
+		t.Fatal("a following chart drew nothing")
+	}
+}

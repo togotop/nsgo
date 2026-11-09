@@ -412,6 +412,7 @@ nsgo/ui.ToolbarGroup
 nsgo/ui.ToolbarSeparator
 nsgo/ui.Tooltip
 nsgo/ui.Tree
+nsgo/ui.Waveform
 nsgo/ui/chat.Actions
 nsgo/ui/chat.ActivityRow
 nsgo/ui/chat.Attachment

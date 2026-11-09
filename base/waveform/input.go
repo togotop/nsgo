@@ -1,0 +1,188 @@
+package waveform
+
+import (
+	"math"
+
+	"github.com/nsgo-dev/nsgo/core"
+)
+
+// dragState is a press in progress: a drag selects a range to zoom to,
+// Shift and a drag pans, and a press near a measurement marker moves it.
+type dragState struct {
+	active bool
+	pan    bool
+	marker int // 0: none, 1: A, 2: B
+	fromX  float64
+	toX    float64
+	view   Viewport
+}
+
+// input is a Chart's interactive state for one render. It turns the
+// pointer's place in the root view into a data x, and changes the view,
+// the cursor and the markers through signals, so every handler leads to
+// one commit.
+type input struct {
+	c        Chart
+	view     *core.Signal[Viewport]
+	hover    *core.Signal[float64]
+	fade     *core.AnimatedValue
+	markA    *core.Signal[float64]
+	markB    *core.Signal[float64]
+	yZoom    *core.Signal[float64]
+	plotSize *core.Signal[core.Size]
+	xView    func() Range
+	setView  func(Viewport)
+	drag     dragState
+}
+
+func newInput(c Chart, view *core.Signal[Viewport], hover, markA, markB, yZoom *core.Signal[float64],
+	fade *core.AnimatedValue, plotSize *core.Signal[core.Size], xView func() Range, setView func(Viewport)) *input {
+	return &input{c: c, view: view, hover: hover, fade: fade, markA: markA, markB: markB,
+		yZoom: yZoom, plotSize: plotSize, xView: xView, setView: setView}
+}
+
+// ownView is the view this chart shows, fitted and clamped to the data,
+// as xView reports it: a zoom or a pan starts from what the user sees,
+// not from the uninitialized viewport a Chart begins with.
+func (in *input) ownView() Viewport { return Viewport{X: in.xView()} }
+
+// xAt turns a pointer's x in the root view into a data x. The plot is
+// inset by axisRoom on the left, and its width is what the canvas reports.
+func (in *input) xAt(px float64) float64 {
+	w := float64(in.plotSize.Get().Width)
+	if w <= 0 {
+		return 0
+	}
+	f := min(max((px-float64(axisRoom))/w, 0), 1)
+	vx := in.xView()
+	return vx.Lo + f*vx.Span()
+}
+
+func (in *input) slop() float64 { return max(in.xView().Span()*0.02, 1e-9) }
+
+func (in *input) onMouseMove(e core.MouseEvent) {
+	x := in.xAt(float64(e.Position.X))
+	if in.drag.active {
+		in.drag.toX = x
+		switch {
+		case in.drag.pan:
+			in.setView(in.drag.view.PanX(in.drag.fromX - x))
+		case in.drag.marker == 1:
+			in.markA.Set(x)
+		case in.drag.marker == 2:
+			in.markB.Set(x)
+		}
+		return
+	}
+	if e.PressedButton != core.MouseButtonNone || (!in.c.Cursor && !in.c.Measure) {
+		return
+	}
+	in.hover.Set(x)
+	in.fade.Set(1)
+	in.c.Sync.setCursor(x)
+	if in.c.OnCursorChange != nil {
+		in.c.OnCursorChange(x)
+	}
+}
+
+func (in *input) onMouseLeave(core.MouseEvent) {
+	if in.drag.active {
+		return
+	}
+	in.hover.Set(math.NaN())
+	in.fade.Set(0)
+	in.c.Sync.setCursor(math.NaN())
+	if in.c.OnCursorChange != nil {
+		in.c.OnCursorChange(math.NaN())
+	}
+}
+
+func (in *input) onPressDown(e core.PressEvent) {
+	x := in.xAt(float64(e.Position.X))
+	in.drag = dragState{active: true, pan: e.Modifiers.Shift, fromX: x, toX: x, view: in.ownView()}
+	if in.c.Measure && !in.drag.pan {
+		switch {
+		case math.Abs(x-in.markA.Get()) < in.slop():
+			in.drag.marker = 1
+		case math.Abs(x-in.markB.Get()) < in.slop():
+			in.drag.marker = 2
+		}
+	}
+}
+
+func (in *input) onPressUp(e core.PressEvent) {
+	if !in.drag.active {
+		return
+	}
+	d := in.drag
+	in.drag = dragState{}
+	if d.pan || d.marker != 0 {
+		return
+	}
+	x := in.xAt(float64(e.Position.X))
+	lo, hi := min(d.fromX, x), max(d.fromX, x)
+	if hi-lo > in.slop() {
+		in.setView(Viewport{X: Range{lo, hi}})
+	}
+}
+
+// onPress fits the view on a double click.
+func (in *input) onPress(e core.PressEvent) {
+	if e.Clicks >= 2 {
+		in.setView(Viewport{})
+		in.yZoom.Set(1)
+	}
+}
+
+func (in *input) onWheel(e core.WheelEvent) {
+	if e.Modifiers.Alt {
+		z := in.yZoom.Get()
+		in.yZoom.Set(min(max(z*(1-float64(e.Delta.Y)/400), 0.05), 20))
+		return
+	}
+	if !e.Modifiers.Control && !e.Modifiers.Platform {
+		// A wheel without a modifier goes on to the scroll views around
+		// the chart, as it does in mygogo's plot.
+		return
+	}
+	step := float64(e.Delta.Y)
+	if e.Touchpad {
+		step /= 4
+	}
+	at := in.xAt(float64(e.Position.X))
+	in.setView(in.ownView().ZoomX(math.Pow(1.25, step/100), at))
+}
+
+func (in *input) onPinch(e core.GestureEvent) {
+	if e.Value <= 0 {
+		return
+	}
+	at := in.xAt(float64(e.Position.X))
+	in.setView(in.ownView().ZoomX(1/float64(e.Value), at))
+}
+
+// onAccessibilityAction steps the cursor through the visible range, as a
+// screen reader's increment and decrement do.
+func (in *input) onAccessibilityAction(name string) {
+	vx := in.xView()
+	x := in.hover.Get()
+	if math.IsNaN(x) {
+		x = vx.Lo + vx.Span()/2
+	}
+	step := vx.Span() / 20
+	switch name {
+	case "increment":
+		x += step
+	case "decrement":
+		x -= step
+	default:
+		return
+	}
+	x = min(max(x, vx.Lo), vx.Hi)
+	in.hover.Set(x)
+	in.fade.Set(1)
+	in.c.Sync.setCursor(x)
+	if in.c.OnCursorChange != nil {
+		in.c.OnCursorChange(x)
+	}
+}

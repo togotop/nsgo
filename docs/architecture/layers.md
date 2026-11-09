@@ -24,18 +24,20 @@ nsgo
 │   ├── tsx                              Runs TSX apps on goja, or the page's engine
 │   │   ├── internal/js                  The engines' one API
 │   │   ├── bundler, compiler            Compiles and loads their bundles
-│   │   ├── textview, editor, diff, terminal  Register base's optional components
+│   │   ├── textview, editor, diff, terminal, waveform  Register base's optional components
 │   │   └── tsxtest                      Runs *.test.tsx as Go tests
 │   └── nsgotest                         Runs apps in tests, headless or on a target, and drives nsgo dev -automation's
 │
 ├── Components
 │   ├── ui                               Styled components on base
 │   │   ├── chat                         A conversation
+│   │   ├── waveform                    A styled waveform
 │   │   └── filepicker, diff, commitgraph, flow  A file picker and styled forms
 │   ├── base                             Unstyled controls, popups, navigation
 │   │   ├── datatable, dock, plot, toast Complex components
 │   │   ├── commitgraph                  A Git history's revision graph
 │   │   ├── flow                         A directed diagram
+│   │   ├── waveform                    A live waveform
 │   │   ├── textview, editor, diff, formula  Complex components with heavier dependencies
 │   │   ├── terminal                     A program in a pseudo-terminal
 │   │   ├── locales                      Their catalogs

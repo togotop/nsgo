@@ -465,6 +465,14 @@ These items wait for community contributions, and a change to one backend record
 | Boxes where views draw | — | DevTools' bounds, and with them the layout audit's boxes, follow transforms, layout animations, transitions and sticky offsets, where they read layout frames now |
 | The layout audit checked on targets | — | `nsgo dev -layout` is checked by hand on Windows, Linux, the web, iOS, Android, tvOS and watchOS, where only its headless tests ran, as it was on macOS (2026-11-15) |
 
+## Waveforms
+
+What `base/waveform` leaves out of mygogo's `ui/chart/plot` ([components](architecture/components.md#waveforms)), in the order to build it.
+
+| Item | Reference | Done when |
+| --- | --- | --- |
+| An image of a chart | mygogo's `plot.PNG` | `Chart.PNG` returns a PNG of what the chart shows: a drawing is played by a platform and `core` has no offscreen image of one, so each backend renders the canvas into one, on a goroutine of its own as a shader's drawable does |
+
 ## TSX and dynamic delivery
 
 What TSX still lacks of NSH's ([TSX and dynamic delivery](architecture/tsx.md)).

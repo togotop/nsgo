@@ -1,6 +1,6 @@
 # Components
 
-`base` holds NSGo's built-in unstyled components, after NSH's `nsh-base` (`nsh/docs/dev/components.md`, `dock.md`): they own behavior, state and accessibility and take every style from the app. A component is a file of `base`, or a package under it when it is complex: `base/commitgraph`, `base/datatable`, `base/dock`, `base/plot` and `base/toast`. Read this before changing a component in `base`; [text view](textview.md) covers `base/textview`, and [editor](editor.md) `base/editor` and `base/diff`.
+`base` holds NSGo's built-in unstyled components, after NSH's `nsh-base` (`nsh/docs/dev/components.md`, `dock.md`): they own behavior, state and accessibility and take every style from the app. A component is a file of `base`, or a package under it when it is complex: `base/commitgraph`, `base/datatable`, `base/dock`, `base/plot`, `base/toast` and `base/waveform`. Read this before changing a component in `base`; [text view](textview.md) covers `base/textview`, and [editor](editor.md) `base/editor` and `base/diff`.
 
 A component whose root is a view of its own takes that view's `OnLayout` and `Tooltip`, as NSH's components take their host's.
 
@@ -133,6 +133,16 @@ Popups are placed against what their trigger holds (`Overlay.AnchorContent`), th
 | `data-dark:` classes on labels | `DarkLabelStyle` and `DarkLabelClass` | A text takes no part states; TSX keeps Go's |
 | `curve` natural by default, linear on a radial line | `CurveDefault`, each mark's own | Go's zero value is one constant |
 | Classes as a string or a function of the row | `SliceClass` for every slice, `SliceClassOf` and `SliceStyleOf` per row | A field has one type, and the app reads its own rows by index |
+
+## Waveforms
+
+`base/waveform` draws a live waveform without recording one drawing operation a sample. A `Source` is where any goroutine pushes a batch; `Chart` adopts a whole burst on the engine in one commit, so a frame costs what a batch costs, not what the sample rate does. `Series` is either static columns of `Y` or a `Source`, and names the axis it is measured on.
+
+The chart fits its samples to the x view, then reduces them to the lowest and highest of each pixel column, so a peak a column covers is never lost. A pyramid of min/max buckets (64, 256, 1024, ... samples) makes the scan O(width): new samples rebuild only the tail buckets and their parents, while a view that moves or zooms scans buckets and rebuilds none. x stays `float64` throughout, as `float32` seconds since the epoch lose sample precision. A `geom` keyed by the view, width and data version keeps a steady frame from decimating again.
+
+Everything that follows the pointer is a view, not a recording: a cross line, its tooltip, two measurement markers with their deltas, notes and a legend. A `Group` shares one x view and one cursor across charts. The words a chart shows go through the app's `Format`, `Label` and `Note`; the component holds none. `ui/waveform` adds type and a fixed chart palette, keeping a theme's colors out of the recorded operations so a switch of appearance restyles in place. `tsx/waveform` registers both forms, with a TSX app's columns of samples in a signal.
+
+`Chart.PNG` has no counterpart: a drawing is played by a platform, and `core` has no offscreen image of one, so a faithful export waits on the backends ([roadmap](../roadmap.md)).
 
 ## Tables
 

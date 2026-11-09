@@ -185,3 +185,6 @@ export interface DataTableTarget { row?: number | null; column?: number | null }
 export type DiffLayout = "split" | "unified";
 /** What a press on a TextView's link does: reported to onLinkPress, or opened. */
 export type TextViewLinks = "report" | "open";
+
+export { Waveform } from "./waveform";
+export type { WaveformProps } from "./waveform";

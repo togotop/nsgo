@@ -526,6 +526,8 @@ const (
 	textDemoNavStackDetail
 	textDemoPlot
 	textDemoPlotDetail
+	textDemoWaveform
+	textDemoWaveformDetail
 	textDemoProgress
 	textDemoProgressDetail
 	textDemoResizable
@@ -2848,6 +2850,8 @@ var keyOfText = [numTexts]string{
 	"demoNavStackDetail",
 	"demoPlot",
 	"demoPlotDetail",
+	"demoWaveform",
+	"demoWaveformDetail",
 	"demoProgress",
 	"demoProgressDetail",
 	"demoResizable",
@@ -5168,6 +5172,8 @@ var textsEn = i18n.NewTexts(""+
 	"Header options, modals, the back button, safe areas"+
 	"Plot"+
 	"A line and area plot with hover, grid lines and motion, sparklines in a list"+
+	"Waveform"+
+	"Live channels decimated to a pixel column, a following window, cursors and measurements"+
 	"Progress"+
 	"Bars, rings, spinners, meters and skeletons"+
 	"Resizable"+
@@ -7485,6 +7491,8 @@ var textsEn = i18n.NewTexts(""+
 		51,
 		4,
 		76,
+		8,
+		87,
 		8,
 		43,
 		9,
@@ -9805,6 +9813,8 @@ var textsZhHans = i18n.NewTexts(""+
 	"标题栏选项、模态页、返回按钮、安全区域"+
 	"图表"+
 	"带悬停、网格线和动效的折线面积图，列表中的迷你图"+
+	"波形"+
+	"按像素列降采样的实时通道，带滚动窗口、游标与测量"+
 	"进度"+
 	"进度条、进度环、加载指示器、仪表与骨架屏"+
 	"可调整大小"+
@@ -12120,6 +12130,8 @@ var textsZhHans = i18n.NewTexts(""+
 		63,
 		9,
 		57,
+		6,
+		72,
 		6,
 		72,
 		6,
@@ -15628,6 +15640,20 @@ func DemoPlotDetail(cx *core.Scope) string { return For(cx).DemoPlotDetail() }
 
 // DemoPlotDetail is the package's DemoPlotDetail in the language of msgs.
 func (msgs Messages) DemoPlotDetail() string { return msgs.text(textDemoPlotDetail) }
+
+// DemoWaveform says "Waveform"
+// in the language the app shows under cx.
+func DemoWaveform(cx *core.Scope) string { return For(cx).DemoWaveform() }
+
+// DemoWaveform is the package's DemoWaveform in the language of msgs.
+func (msgs Messages) DemoWaveform() string { return msgs.text(textDemoWaveform) }
+
+// DemoWaveformDetail says "Live channels decimated to a pixel column, a following window, cursors and measurements"
+// in the language the app shows under cx.
+func DemoWaveformDetail(cx *core.Scope) string { return For(cx).DemoWaveformDetail() }
+
+// DemoWaveformDetail is the package's DemoWaveformDetail in the language of msgs.
+func (msgs Messages) DemoWaveformDetail() string { return msgs.text(textDemoWaveformDetail) }
 
 // DemoProgress says "Progress"
 // in the language the app shows under cx.

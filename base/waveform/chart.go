@@ -18,6 +18,10 @@ const (
 	// already trimmed cannot come back, so a zoom-out needs a reserve to
 	// fill its wider view at once rather than waiting for new samples.
 	retainFactor = 4
+	// A chart with neither Follow nor TimeBase shows every sample it has.
+	// Bound that history by count, so a source nobody zooms cannot grow
+	// forever: defaultRetainSamples is the stretch it keeps, in samples.
+	defaultRetainSamples = 1 << 18
 )
 
 // Chart is a waveform view: its series, what it shows and how it draws.
@@ -127,6 +131,16 @@ func (c Chart) baseWindow() float64 {
 		return c.TimeBase * float64(cols)
 	}
 	return c.Follow
+}
+
+// retainWindow is how much x history a source keeps before the user zooms:
+// a reserve of the base window, or a bounded stretch of samples for a chart
+// that shows all it has.
+func (c Chart) retainWindow(dx float64) float64 {
+	if w := c.baseWindow(); w > 0 {
+		return retainFactor * w
+	}
+	return defaultRetainSamples * dx
 }
 
 // windowWidth is how much x a following or triggered chart shows: its base
@@ -299,11 +313,9 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 	for i := range c.Series {
 		if s := c.Series[i].Source; s != nil {
 			s.attach(cx)
-			// Keep twice the base window, so a following or time-based
-			// chart does not grow without bound. A zoom widens it below.
-			if w := c.baseWindow(); w > 0 {
-				s.Retain(retainFactor * w)
-			}
+			// Bound every live source, even a chart with no Follow or
+			// TimeBase that shows all its samples. A zoom widens it below.
+			s.Retain(c.retainWindow(s.d.dx))
 		}
 	}
 	if c.Sync != nil {
@@ -385,13 +397,12 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 		// The history a source keeps must cover the view the user chose,
 		// or a zoom-out shows only a short stretch of waveform. Retain only
 		// grows; a double click gives the surplus back.
-		base := retainFactor * c.baseWindow()
 		for _, st := range states {
 			if s := st.cfg.Source; s != nil {
 				if v.X.Valid() {
 					s.Retain(retainFactor * v.X.Span())
-				} else if base > 0 {
-					s.resizeRetain(base)
+				} else {
+					s.resizeRetain(c.retainWindow(s.d.dx))
 				}
 			}
 		}

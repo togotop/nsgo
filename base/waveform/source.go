@@ -67,8 +67,9 @@ func (s *Source) Push(y []float32) {
 
 // Retain keeps at most span x units of history, so a chart that follows
 // the newest samples does not grow forever. Call it on the engine; a Chart
-// names a stretch twice its Follow window, leaving room to pan back. Several
-// charts sharing a Source keep the widest stretch any of them asks for.
+// names a reserve of its base window to leave room for a zoom out, or a
+// bounded stretch of samples when it shows all it has. Several charts
+// sharing a Source keep the widest stretch any of them asks for.
 func (s *Source) Retain(span float64) {
 	if span > s.retain {
 		s.retain = span

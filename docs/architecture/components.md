@@ -146,7 +146,7 @@ A `Trigger` pins a series' edge at its `Position` so a repeating waveform stands
 
 A `Series` has vertical controls, `Offset`, `Scale`, `Invert` and AC coupling. `TimeBase` with `DivisionsX` and `DivisionsY` sets the window and draws the scope's grid, and `XLog` puts x on a logarithmic scale with decade ticks. A drag pans, Shift and a drag selects a range to zoom to, a double click fits the view, and `Snap` settles the cursor and the markers on a nearby peak, trough or end.
 
-A zoom widens the stretch a `Source` retains, so the view stays full instead of showing a short trace in empty space; a double click gives the surplus back. Readings and AC coupling take the same reduced pixel-column points the line draws, at most about two per pixel whatever the history holds, so neither costs more than a frame. Frequency, period, duty and edge times are approximate when a view spans many samples per pixel.
+A zoom widens the stretch a `Source` retains, so the view stays full instead of showing a short trace in empty space; a double click gives the surplus back. Readings and AC coupling take the same reduced pixel-column points the line draws, at most about two per pixel whatever the history holds, so neither costs more than a frame. Frequency, period, duty and edge times are approximate when a view spans many samples per pixel. A chart with neither `Follow` nor `TimeBase` still bounds its history, by sample count.
 
 `Chart.PNG` has no counterpart: a drawing is played by a platform, and `core` has no offscreen image of one, so a faithful export waits on the backends ([roadmap](../roadmap.md)).
 

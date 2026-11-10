@@ -13,6 +13,11 @@ const (
 	bottomRoom    core.Points = 22
 	topRoom       core.Points = 8
 	rightRoom     core.Points = 8
+
+	// retainFactor is how many windows of history a source keeps. History
+	// already trimmed cannot come back, so a zoom-out needs a reserve to
+	// fill its wider view at once rather than waiting for new samples.
+	retainFactor = 4
 )
 
 // Chart is a waveform view: its series, what it shows and how it draws.
@@ -34,17 +39,39 @@ type Chart struct {
 	// compactly; a Time chart's app gives the words for a date or a time.
 	XFormat func(float64) string
 	Follow  float64
+	// TimeBase is x units per horizontal division; with Divisions it sets
+	// the window a following or triggered chart shows. Zero uses Follow.
+	TimeBase float64
+	// DivisionsX and DivisionsY are the scope grid's columns and rows. Zero
+	// keeps the axis ticks for horizontal lines and draws no columns.
+	DivisionsX, DivisionsY int
+	// XLog draws x on a logarithmic scale, for frequencies and other
+	// quantities that span decades. The view's low end must be positive.
+	XLog bool
 	// View is where the chart starts. A zoom or a pan the user makes
 	// stays in the component: an app hears it with OnViewChange but
 	// cannot set it back into a running chart.
 	View Viewport
 	Sync *Group
 
+	// Trigger pins an edge in the view, and Run stops, starts or takes one
+	// capture. Both are optional; without them a chart follows its data.
+	Trigger *Trigger
+	Run     *Run
+
 	Cursor  bool
 	Legend  bool
 	Measure bool
-	Label   string
-	Note    string
+	// Snap makes the cursor and the measurement markers settle on a nearby
+	// peak, trough or end of a series, within a few pixels.
+	Snap bool
+	// Measurements are automatic readings shown over the plot, apart from
+	// the two markers Measure turns on.
+	Measurements     []Measurement
+	MeasurementClass string
+	MeasurementStyle core.Style
+	Label            string
+	Note             string
 
 	Class          string
 	Style          core.Style
@@ -58,8 +85,12 @@ type Chart struct {
 	CrossLineStyle core.Style
 	MarkClass      string
 	MarkStyle      core.Style
-	Tooltip        core.Node
-	TooltipOffset  core.Points
+	// MarkLabels names the two markers, as "A" and "B". Empty shows none;
+	// the component holds no words of its own.
+	MarkLabels    [2]string
+	TriggerColor  core.Color
+	Tooltip       core.Node
+	TooltipOffset core.Points
 
 	OnCursorChange func(float64)
 	OnViewChange   func(Viewport)
@@ -85,6 +116,56 @@ func (c Chart) plotInsets() (left, right core.Points) {
 	return
 }
 
+// baseWindow is the window a chart starts with, before the user zooms:
+// its time base over the grid's columns, else Follow, else zero.
+func (c Chart) baseWindow() float64 {
+	if c.TimeBase > 0 {
+		cols := c.DivisionsX
+		if cols <= 0 {
+			cols = 10
+		}
+		return c.TimeBase * float64(cols)
+	}
+	return c.Follow
+}
+
+// windowWidth is how much x a following or triggered chart shows: its base
+// window, else the view's span, else the data's.
+func (c Chart) windowWidth(v Viewport, e Range) float64 {
+	if w := c.baseWindow(); w > 0 {
+		return w
+	}
+	if v.X.Valid() {
+		return v.X.Span()
+	}
+	return e.Span()
+}
+
+// xFrac is where x lies across vx, 0 to 1, on a log x axis too.
+func (c Chart) xFrac(x float64, vx Range) float64 {
+	if vx.Span() <= 0 {
+		return 0
+	}
+	if c.XLog && vx.Lo > 0 && x > 0 {
+		llo, lhi := math.Log10(vx.Lo), math.Log10(vx.Hi)
+		if lhi > llo {
+			return (math.Log10(x) - llo) / (lhi - llo)
+		}
+	}
+	return (x - vx.Lo) / vx.Span()
+}
+
+// xAtFrac is the data x at f across vx, 0 to 1, on a log x axis too.
+func (c Chart) xAtFrac(f float64, vx Range) float64 {
+	if c.XLog && vx.Lo > 0 {
+		llo, lhi := math.Log10(vx.Lo), math.Log10(vx.Hi)
+		if lhi > llo {
+			return math.Pow(10, llo+f*(lhi-llo))
+		}
+	}
+	return vx.Lo + f*vx.Span()
+}
+
 func (c Chart) axisAt(k int) Axis {
 	if len(c.Axes) == 0 || k < 0 || k >= len(c.Axes) {
 		return Axis{}
@@ -101,6 +182,8 @@ type seriesState struct {
 	static data
 	g      geom
 	axis   int
+	// live is the source's data while a stopped chart draws a copy of it.
+	live *data
 }
 
 func (c Chart) states() []*seriesState {
@@ -144,12 +227,26 @@ type frame struct {
 	ticksX []Tick
 	ticksY [][]Tick
 	series []frameSeries
+
+	// trigger is where the trigger's edge sits across the view, 0 to 1,
+	// when triggered says an edge was found.
+	trigger   float64
+	triggered bool
 }
 
 type frameSeries struct {
 	pts  []float32
 	cfg  Series
 	axis int
+
+	// base, scale and offset are the channel's vertical controls for this
+	// frame, so the line and the fit read the same transformed value.
+	base, scale, offset float64
+}
+
+// y is a sample after the channel's vertical controls.
+func (fs frameSeries) y(v float32) float32 {
+	return float32((float64(v)-fs.base)*fs.scale + fs.offset)
 }
 
 func extentOf(states []*seriesState) Range {
@@ -196,11 +293,16 @@ func (c Chart) gridPaint() core.Color {
 
 // Render implements core.Node.
 func (c Chart) Render(cx *core.Scope) core.Node {
+	if c.Run != nil {
+		c.Run.attach(cx)
+	}
 	for i := range c.Series {
 		if s := c.Series[i].Source; s != nil {
 			s.attach(cx)
-			if c.Follow > 0 {
-				s.Retain(2 * c.Follow)
+			// Keep twice the base window, so a following or time-based
+			// chart does not grow without bound. A zoom widens it below.
+			if w := c.baseWindow(); w > 0 {
+				s.Retain(retainFactor * w)
 			}
 		}
 	}
@@ -217,11 +319,62 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 	yZoom := core.NewSignal(cx, float64(1))
 	focused := core.NewSignal(cx, false)
 
+	var heldX Range
+	// viewAnchor is how far the right end of a view the user zoomed or
+	// panned sits behind the newest sample. Keeping it fixed makes a
+	// running chart scroll at a steady rate instead of breathing as
+	// Retain trims the history.
+	var viewAnchor float64
+	var anchored bool
+	// triggerX is the edge the view last anchored on, so the line on the
+	// plot and the view always agree. frozenView holds a single-shot
+	// capture in a signal, so it survives a re-run of the drawing.
+	var triggerX float64
+	var haveTrigger bool
+	frozenView := core.NewSignal(cx, Range{})
 	xView := func() Range {
 		e := extentOf(states)
 		v := c.Sync.viewOf(view.Get())
+		if c.Trigger != nil && c.Trigger.Mode == TriggerSingle {
+			if f := frozenView.GetUntracked(); f.Valid() {
+				return f
+			}
+		}
+		if anchored && v.X.Valid() && e.Valid() {
+			return followView(v, e, viewAnchor)
+		}
+		if c.Trigger != nil && e.Valid() {
+			pos := c.Trigger.Position
+			if pos <= 0 {
+				pos = 0.5
+			}
+			pos = min(max(pos, 0), 1)
+			// A view the user zoomed or panned takes over, so a stopped or
+			// triggered chart can still be inspected; a double click brings
+			// the trigger back.
+			if v.X.Valid() {
+				return v.Clamp(e).X
+			}
+			width := c.windowWidth(v, e)
+			// Leave the trigger's share of the window after the edge, so the
+			// view is filled instead of ending at the newest sample.
+			margin := (1 - pos) * width
+			if tx, ok := c.triggerAtBefore(states, width, e.Hi-margin); ok {
+				r := Range{tx - pos*width, tx + (1-pos)*width}
+				clamped := Viewport{X: r}.Clamp(e).X
+				heldX = clamped
+				triggerX, haveTrigger = tx, true
+				return clamped
+			}
+			if c.Trigger.Mode != TriggerAuto && heldX.Valid() {
+				return heldX
+			}
+		}
+		if c.TimeBase > 0 && e.Valid() {
+			return Viewport{X: Range{e.Hi - c.windowWidth(v, e), e.Hi}}.Clamp(e).X
+		}
 		if c.Follow > 0 && e.Valid() {
-			return Range{e.Hi - c.Follow, e.Hi}
+			return Viewport{X: Range{e.Hi - c.Follow, e.Hi}}.Clamp(e).X
 		}
 		if !v.X.Valid() {
 			v = v.Fit(e)
@@ -229,6 +382,36 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 		return v.Clamp(e).X
 	}
 	setView := func(v Viewport) {
+		// The history a source keeps must cover the view the user chose,
+		// or a zoom-out shows only a short stretch of waveform. Retain only
+		// grows; a double click gives the surplus back.
+		base := retainFactor * c.baseWindow()
+		for _, st := range states {
+			if s := st.cfg.Source; s != nil {
+				if v.X.Valid() {
+					s.Retain(retainFactor * v.X.Span())
+				} else if base > 0 {
+					s.resizeRetain(base)
+				}
+			}
+		}
+		if v.X.Valid() {
+			if e := extentOf(states); e.Valid() {
+				viewAnchor = e.Hi - v.X.Hi
+				anchored = true
+			}
+		} else {
+			anchored = false
+			// A double click re-arms a single-shot trigger and puts the
+			// live samples back under it.
+			frozenView.Set(Range{})
+			for _, st := range states {
+				if st.live != nil {
+					st.d = st.live
+					st.live = nil
+				}
+			}
+		}
 		if c.Sync != nil {
 			c.Sync.setView(v)
 		} else {
@@ -241,15 +424,86 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 	if c.Sync != nil && c.OnViewChange != nil {
 		cx.Effect(func() { c.OnViewChange(c.Sync.viewOf(view.Get())) })
 	}
-	in := newInput(c, view, hover, markA, markB, yZoom, fade, plotSize, xView, setView)
+	snap := func(x float64) float64 {
+		return c.snapX(x, states, xView(), int(plotSize.Get().Width))
+	}
+	in := newInput(c, view, hover, markA, markB, yZoom, fade, plotSize, xView, setView, snap)
+
+	// Single arms one capture: it waits for an edge that arrives after
+	// the press, then stops, leaving that capture on screen. An edge
+	// already in the buffer would stop it the instant it was pressed.
+	var armedAt float64
+	if c.Trigger != nil && c.Run != nil {
+		cx.Effect(func() {
+			if !c.Run.single.Get() {
+				armedAt = 0
+				return
+			}
+			for _, st := range states {
+				if st.cfg.Source != nil && st.cfg.Source.changed != nil {
+					st.cfg.Source.changed.Get()
+				}
+			}
+			e := extentOf(states)
+			if !e.Valid() {
+				return
+			}
+			if armedAt == 0 {
+				armedAt = e.Hi
+				return
+			}
+			width := c.windowWidth(Viewport{}, e)
+			pos := c.Trigger.Position
+			if pos <= 0 {
+				pos = 0.5
+			}
+			pos = min(max(pos, 0), 1)
+			if tx, ok := c.triggerAtBefore(states, width, e.Hi-(1-pos)*width); ok && tx > armedAt {
+				c.Run.single.Set(false)
+				c.Run.running.Set(false)
+				armedAt = 0
+			}
+		})
+	}
 
 	decimated := core.NewMemo(cx, func() *frame {
-		for _, st := range states {
-			if st.cfg.Source != nil && st.cfg.Source.changed != nil {
-				st.cfg.Source.changed.Get()
+		vx := xView()
+		// Capture the first usable view, whether or not an edge was found,
+		// and hold it for a single-shot trigger.
+		if c.Trigger != nil && c.Trigger.Mode == TriggerSingle && vx.Valid() &&
+			!frozenView.GetUntracked().Valid() {
+			frozenView.Set(vx)
+		}
+		running := true
+		if c.Run != nil && c.Run.running != nil {
+			running = c.Run.running.Get()
+		}
+		// A single-shot trigger freezes the samples it captured, so Retain
+		// cannot trim the held view out from under it.
+		if c.Trigger != nil && c.Trigger.Mode == TriggerSingle && frozenView.GetUntracked().Valid() {
+			running = false
+		}
+		if running {
+			for _, st := range states {
+				if st.live != nil {
+					st.d = st.live
+					st.live = nil
+				}
+				if st.cfg.Source != nil && st.cfg.Source.changed != nil {
+					st.cfg.Source.changed.Get()
+				}
+			}
+		} else {
+			// Stopped: draw a copy of the samples taken now, so the view
+			// still zooms and pans over the capture while the source keeps
+			// filling, and the readings hold still.
+			for _, st := range states {
+				if st.live == nil && st.d != nil {
+					st.live = st.d
+					st.d = st.d.clone()
+				}
 			}
 		}
-		vx := xView()
 		px := int(plotSize.Get().Width)
 		if px <= 0 || !vx.Valid() {
 			return nil
@@ -267,16 +521,33 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 			if st.cfg.Hidden || st.d == nil {
 				continue
 			}
-			sc := st.d.scanFor(vx, px)
+			sc := st.d.scanFor(vx, px, c.XLog)
 			key := geomKey{lo: vx.Lo, hi: vx.Hi, px: px, version: st.d.version,
-				n: len(st.d.y), x0: st.d.x0, dx: st.d.dx}
+				n: len(st.d.y), x0: st.d.x0, dx: st.d.dx, logX: c.XLog}
 			pts := st.g.get(key, sc, vx, px)
-			f.series[idx] = frameSeries{pts: pts, cfg: st.cfg, axis: st.axis}
+			base := 0.0
+			if st.cfg.AC {
+				// Remove the direct current from the same reduced points
+				// the line draws, so AC coupling stays O(width) too.
+				sum, n := 0.0, 0
+				for i := 1; i < len(pts); i += 2 {
+					if v := float64(pts[i]); v == v {
+						sum += v
+						n++
+					}
+				}
+				if n > 0 {
+					base = sum / float64(n)
+				}
+			}
+			fs := frameSeries{pts: pts, cfg: st.cfg, axis: st.axis,
+				base: base, scale: st.cfg.scaleY(), offset: st.cfg.Offset}
+			f.series[idx] = fs
 			for i := 0; i+1 < len(pts); i += 2 {
 				if pts[i] < 0 || pts[i] > float32(px) {
 					continue
 				}
-				v := float64(pts[i+1])
+				v := float64(fs.y(pts[i+1]))
 				lo[st.axis], hi[st.axis] = min(lo[st.axis], v), max(hi[st.axis], v)
 			}
 		}
@@ -293,9 +564,19 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 			f.logs[k] = a.Log
 			f.ticksY[k] = a.ticks(r.Lo, r.Hi, 4)
 		}
-		if c.Time {
+		// The line marks the edge the view actually anchored on, in the
+		// view's own scale, so it stays put when the view is held or zoomed
+		// and stays correct on a log x axis.
+		if c.Trigger != nil && haveTrigger && vx.Span() > 0 {
+			f.trigger = c.xFrac(triggerX, vx)
+			f.triggered = true
+		}
+		switch {
+		case c.XLog && vx.Lo > 0:
+			f.ticksX = Axis{Log: true, Format: c.XFormat}.ticks(vx.Lo, vx.Hi, 6)
+		case c.Time:
 			f.ticksX = timeTicks(vx.Lo, vx.Hi, 6, c.XFormat)
-		} else {
+		default:
 			f.ticksX = linearTicks(vx.Lo, vx.Hi, 6, c.XFormat)
 		}
 		return f
@@ -311,12 +592,37 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 			return
 		}
 		w, h := float32(s.Width), float32(s.Height)
-		if len(f.ticksY) > 0 {
-			d.SetStrokeColor(c.gridPaint()).SetLineWidth(1)
+		d.SetStrokeColor(c.gridPaint()).SetLineWidth(1)
+		if c.DivisionsX > 0 || c.DivisionsY > 0 {
+			cols, rows := c.DivisionsX, c.DivisionsY
+			if cols <= 0 {
+				cols = 10
+			}
+			if rows <= 0 {
+				rows = 8
+			}
+			for i := 1; i < cols; i++ {
+				x := w * float32(i) / float32(cols)
+				d.BeginPath().MoveTo(x, 0).LineTo(x, h).Stroke()
+			}
+			for j := 1; j < rows; j++ {
+				y := h * float32(j) / float32(rows)
+				d.BeginPath().MoveTo(0, y).LineTo(w, y).Stroke()
+			}
+		} else if len(f.ticksY) > 0 {
 			for _, t := range f.ticksY[0] {
 				y := h - float32(t.At)*h
 				d.BeginPath().MoveTo(0, y).LineTo(w, y).Stroke()
 			}
+		}
+		if c.Trigger != nil && f.triggered && f.trigger >= 0 && f.trigger <= 1 {
+			col := c.TriggerColor
+			if col == 0 {
+				col = core.RGBA(0xcc3333, 0.8)
+			}
+			x := float32(f.trigger) * w
+			d.SetStrokeColor(col).SetLineWidth(1)
+			d.BeginPath().MoveTo(x, 0).LineTo(x, h).Stroke()
 		}
 		for _, b := range c.Bands {
 			a := b.Axis
@@ -354,7 +660,7 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 					}
 					d.MoveTo(seg[0], h)
 					for i := 0; i+1 < len(seg); i += 2 {
-						d.LineTo(seg[i], yOf(seg[i+1], r, h, log))
+						d.LineTo(seg[i], yOf(fs.y(seg[i+1]), r, h, log))
 					}
 					d.LineTo(seg[len(seg)-2], h).ClosePath()
 				})
@@ -365,9 +671,9 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 				if len(seg) < 2 {
 					return
 				}
-				d.MoveTo(seg[0], yOf(seg[1], r, h, log))
+				d.MoveTo(seg[0], yOf(fs.y(seg[1]), r, h, log))
 				for i := 2; i+1 < len(seg); i += 2 {
-					d.LineTo(seg[i], yOf(seg[i+1], r, h, log))
+					d.LineTo(seg[i], yOf(fs.y(seg[i+1]), r, h, log))
 				}
 			})
 			paint := core.PaintCurrentColor
@@ -386,7 +692,7 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 		}
 		h := float32(s.Height)
 		for _, n := range c.Notes {
-			col := (n.X - f.vx.Lo) / f.vx.Span() * float64(f.px)
+			col := c.xFrac(n.X, f.vx) * float64(f.px)
 			if col < 0 || col > float64(f.px) {
 				continue
 			}
@@ -492,6 +798,7 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 		TestID:       c.TestID,
 		OnMouseMove:  in.onMouseMove,
 		OnMouseLeave: in.onMouseLeave,
+		OnTouch:      in.onTouch,
 		OnWheel:      in.onWheel,
 		OnPinch:      in.onPinch,
 		OnPressDown:  in.onPressDown,

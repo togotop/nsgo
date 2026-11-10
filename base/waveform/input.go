@@ -6,14 +6,27 @@ import (
 	"github.com/nsgo-dev/nsgo/core"
 )
 
-// dragState is a press in progress: a drag selects a range to zoom to,
-// Shift and a drag pans, and a press near a measurement marker moves it.
+// dragState is a press in progress: a drag pans, Shift and a drag selects
+// a range to zoom to, Alt and a drag sets the markers' interval, and a
+// press near a measurement marker moves it.
 type dragState struct {
 	active bool
-	pan    bool
-	marker int // 0: none, 1: A, 2: B
+	zoom   bool
+	sel    bool // Alt: a drag sets the markers' interval
+	marker int  // 0: none, 1: A, 2: B
 	fromX  float64
 	view   Viewport
+	moved  bool
+}
+
+// touchState is a finger drag in progress: one finger pans, two pinch the
+// view, as a scope's touch surface does.
+type touchState struct {
+	active   bool
+	pinch    bool
+	lastX    float64
+	lastDist float64
+	view     Viewport
 }
 
 // input is a Chart's interactive state for one render. It turns the
@@ -31,13 +44,17 @@ type input struct {
 	plotSize *core.Signal[core.Size]
 	xView    func() Range
 	setView  func(Viewport)
+	snap     func(float64) float64
 	drag     dragState
+	touch    touchState
+	pinched  bool
 }
 
 func newInput(c Chart, view *core.Signal[Viewport], hover, markA, markB, yZoom *core.Signal[float64],
-	fade *core.AnimatedValue, plotSize *core.Signal[core.Size], xView func() Range, setView func(Viewport)) *input {
+	fade *core.AnimatedValue, plotSize *core.Signal[core.Size], xView func() Range, setView func(Viewport),
+	snap func(float64) float64) *input {
 	return &input{c: c, view: view, hover: hover, fade: fade, markA: markA, markB: markB,
-		yZoom: yZoom, plotSize: plotSize, xView: xView, setView: setView}
+		yZoom: yZoom, plotSize: plotSize, xView: xView, setView: setView, snap: snap}
 }
 
 // ownView is the view this chart shows, fitted and clamped to the data,
@@ -54,10 +71,18 @@ func (in *input) xAt(px float64) float64 {
 	}
 	f := min(max((px-float64(axisRoom))/w, 0), 1)
 	vx := in.xView()
-	return vx.Lo + f*vx.Span()
+	return in.c.xAtFrac(f, vx)
 }
 
-func (in *input) slop() float64 { return max(in.xView().Span()*0.02, 1e-9) }
+// moved reports whether the pointer has travelled two percent of the view
+// on screen, which is the same test on a linear and a log x axis.
+func (in *input) moved(x, from float64) bool {
+	vx := in.xView()
+	if vx.Span() <= 0 {
+		return false
+	}
+	return math.Abs(in.c.xFrac(x, vx)-in.c.xFrac(from, vx)) > 0.02
+}
 
 // frac is where a data x lies in the view, 0 to 1. Markers are kept as
 // fractions so they hold their place on screen as the window moves.
@@ -66,26 +91,36 @@ func (in *input) frac(x float64) float64 {
 	if vx.Span() <= 0 {
 		return 0
 	}
-	return min(max((x-vx.Lo)/vx.Span(), 0), 1)
+	return min(max(in.c.xFrac(x, vx), 0), 1)
 }
 
 func (in *input) onMouseMove(e core.MouseEvent) {
 	x := in.xAt(float64(e.Position.X))
 	if in.drag.active {
 		switch {
-		case in.drag.pan:
-			in.setView(in.drag.view.PanX(in.drag.fromX - x))
+		case in.drag.sel:
+			in.markB.Set(in.frac(in.snap(x)))
 		case in.drag.marker == 1:
-			in.markA.Set(in.frac(x))
+			in.markA.Set(in.frac(in.snap(x)))
 		case in.drag.marker == 2:
-			in.markB.Set(in.frac(x))
+			in.markB.Set(in.frac(in.snap(x)))
+		case !in.drag.zoom:
+			// A dead zone keeps a press that is not quite on a marker from
+			// panning the waveform on its first pixel of jitter.
+			if !in.drag.moved {
+				if !in.moved(x, in.drag.fromX) {
+					return
+				}
+				in.drag.moved = true
+			}
+			in.setView(in.drag.view.PanX(in.drag.fromX - x))
 		}
 		return
 	}
 	if e.PressedButton != core.MouseButtonNone || (!in.c.Cursor && !in.c.Measure) {
 		return
 	}
-	in.setCursor(x)
+	in.setCursor(in.snap(x))
 }
 
 // setCursor and clearCursor are the one path every input takes to the
@@ -108,29 +143,57 @@ func (in *input) clearCursor() {
 	}
 }
 
-// cursorStep moves the cursor by a twentieth of the view; cursorEnd takes
-// it to either end. Without a cursor the first key starts in the middle.
+// cursorStep moves the cursor by a twentieth of the view on screen;
+// cursorEnd takes it to either end. Both use the view's scale, so a log x
+// axis steps by equal distances rather than equal data x.
 func (in *input) cursorStep(dir int) {
 	vx := in.xView()
 	x := in.hover.Get()
 	if math.IsNaN(x) {
-		x = vx.Lo + vx.Span()/2
+		x = in.c.xAtFrac(0.5, vx)
 	}
-	in.setCursor(min(max(x+float64(dir)*vx.Span()/20, vx.Lo), vx.Hi))
+	f := in.c.xFrac(x, vx)
+	in.setCursor(in.c.xAtFrac(min(max(f+float64(dir)*0.05, 0), 1), vx))
 }
 
 func (in *input) cursorEnd(first bool) {
 	vx := in.xView()
 	if first {
-		in.setCursor(vx.Lo)
+		in.setCursor(in.c.xAtFrac(0, vx))
 	} else {
-		in.setCursor(vx.Hi)
+		in.setCursor(in.c.xAtFrac(1, vx))
 	}
 }
 
-// keyBindings binds the chart's keys while it has the focus, as base/plot's
-// keys do: Left and Right step the cursor, Home and End take it to the
-// view's ends, Escape clears it.
+// panView slides the view by a tenth of what it shows, as mygogo's arrow
+// keys do. The bare arrow keys belong to the cursor, so these take Shift.
+func (in *input) panView(dir int) {
+	vx := in.xView()
+	if !vx.Valid() {
+		return
+	}
+	in.setView(in.ownView().PanX(float64(dir) * vx.Span() * 0.1))
+}
+
+// zoomView scales the view around its middle from the keyboard.
+func (in *input) zoomView(f float64) {
+	vx := in.xView()
+	if !vx.Valid() {
+		return
+	}
+	in.setView(in.zoom(f, (vx.Lo+vx.Hi)/2))
+}
+
+// fitView resets the view, as a double click does.
+func (in *input) fitView() {
+	in.setView(Viewport{})
+	in.yZoom.Set(1)
+}
+
+// keyBindings binds the chart's keys while it has the focus: Left and Right
+// step the cursor, Home and End take it to the view's ends and Escape clears
+// it; with Shift they pan and fit the view, and + and - zoom it, as mygogo's
+// plot does with its bare arrows and +/- keys.
 func keyBindings(in *input, focused func() bool) core.Node {
 	return core.Show{When: focused, Then: func(cx *core.Scope) core.Node {
 		cx.OnKeyWith("left", core.KeyOptions{Repeat: true}, func() { in.cursorStep(-1) })
@@ -138,6 +201,11 @@ func keyBindings(in *input, focused func() bool) core.Node {
 		cx.OnKey("home", func() { in.cursorEnd(true) })
 		cx.OnKey("end", func() { in.cursorEnd(false) })
 		cx.OnKey("escape", in.clearCursor)
+		cx.OnKeyWith("shift+left", core.KeyOptions{Repeat: true}, func() { in.panView(-1) })
+		cx.OnKeyWith("shift+right", core.KeyOptions{Repeat: true}, func() { in.panView(1) })
+		cx.OnKey("equal", func() { in.zoomView(0.8) })
+		cx.OnKey("minus", func() { in.zoomView(1.25) })
+		cx.OnKey("shift+home", in.fitView)
 		return nil
 	}}
 }
@@ -151,14 +219,27 @@ func (in *input) onMouseLeave(core.MouseEvent) {
 
 func (in *input) onPressDown(e core.PressEvent) {
 	x := in.xAt(float64(e.Position.X))
-	in.drag = dragState{active: true, pan: e.Modifiers.Shift, fromX: x, view: in.ownView()}
-	if in.c.Measure && !in.drag.pan {
-		fx := in.frac(x)
-		switch {
-		case math.Abs(fx-in.markA.Get()) < 0.02:
-			in.drag.marker = 1
-		case math.Abs(fx-in.markB.Get()) < 0.02:
-			in.drag.marker = 2
+	in.drag = dragState{active: true, zoom: e.Modifiers.Shift, sel: e.Modifiers.Alt, fromX: x, view: in.ownView()}
+	if in.c.Measure {
+		if in.drag.sel {
+			in.markA.Set(in.frac(in.snap(x)))
+			in.markB.Set(in.markA.Get())
+			return
+		}
+		if !in.drag.zoom {
+			fx := in.frac(x)
+			// Give the markers a finger's width, about ten points, so a
+			// drag meant for one does not pan the chart instead.
+			hit := 0.03
+			if w := in.plotSize.Get().Width; w > 0 {
+				hit = max(hit, 16/float64(w))
+			}
+			switch {
+			case math.Abs(fx-in.markA.Get()) < hit:
+				in.drag.marker = 1
+			case math.Abs(fx-in.markB.Get()) < hit:
+				in.drag.marker = 2
+			}
 		}
 	}
 }
@@ -169,12 +250,20 @@ func (in *input) onPressUp(e core.PressEvent) {
 	}
 	d := in.drag
 	in.drag = dragState{}
-	if d.pan || d.marker != 0 {
+	x := in.xAt(float64(e.Position.X))
+	if d.sel {
+		if in.c.Measure {
+			a, b := in.markA.Get(), in.frac(in.snap(x))
+			in.markA.Set(min(a, b))
+			in.markB.Set(max(a, b))
+		}
 		return
 	}
-	x := in.xAt(float64(e.Position.X))
+	if d.marker != 0 || !d.zoom {
+		return
+	}
 	lo, hi := min(d.fromX, x), max(d.fromX, x)
-	if hi-lo > in.slop() {
+	if in.moved(x, d.fromX) {
 		in.setView(Viewport{X: Range{lo, hi}})
 	}
 }
@@ -184,6 +273,99 @@ func (in *input) onPress(e core.PressEvent) {
 	if e.Clicks >= 2 {
 		in.setView(Viewport{})
 		in.yZoom.Set(1)
+	}
+}
+
+// zoom scales the view around at, in log space on a log x axis so a decade
+// keeps the width it had.
+func (in *input) zoom(f, at float64) Viewport {
+	v := in.ownView()
+	if in.c.XLog && v.X.Lo > 0 && at > 0 {
+		llo, lhi, lat := math.Log10(v.X.Lo), math.Log10(v.X.Hi), math.Log10(at)
+		if lhi > llo {
+			lo, hi := lat-(lat-llo)*f, lat+(lhi-lat)*f
+			return Viewport{X: Range{math.Pow(10, lo), math.Pow(10, hi)}}
+		}
+	}
+	return v.ZoomX(f, at)
+}
+
+// onTouch pans with one finger and pinches with two, as a touch surface
+// does; a mouse pans through OnMouseMove instead.
+func (in *input) onTouch(e core.TouchEvent) {
+	switch e.Phase {
+	case core.TouchStart:
+		if len(e.Touches) == 0 {
+			return
+		}
+		in.drag = dragState{}
+		// A finger on a marker moves it, as a mouse does, instead of
+		// starting a pan that would move the waveform under it.
+		if in.c.Measure && len(e.Touches) == 1 {
+			fx := in.frac(in.xAt(float64(e.Touches[0].Position.X)))
+			hit := 0.03
+			if w := in.plotSize.Get().Width; w > 0 {
+				hit = max(hit, 16/float64(w))
+			}
+			switch {
+			case math.Abs(fx-in.markA.Get()) < hit:
+				in.drag = dragState{active: true, marker: 1}
+				return
+			case math.Abs(fx-in.markB.Get()) < hit:
+				in.drag = dragState{active: true, marker: 2}
+				return
+			}
+		}
+		in.touch = touchState{active: true, view: in.ownView()}
+		in.touch.lastX = in.xAt(float64(e.Touches[0].Position.X))
+		if len(e.Touches) >= 2 {
+			in.touch.pinch = true
+			in.touch.lastDist = math.Abs(float64(e.Touches[0].Position.X - e.Touches[1].Position.X))
+		}
+	case core.TouchMove:
+		if in.drag.active && in.drag.marker != 0 && len(e.Touches) == 1 {
+			x := in.frac(in.snap(in.xAt(float64(e.Touches[0].Position.X))))
+			if in.drag.marker == 1 {
+				in.markA.Set(x)
+			} else {
+				in.markB.Set(x)
+			}
+			return
+		}
+		if !in.touch.active {
+			return
+		}
+		if len(e.Touches) >= 2 {
+			in.touch.pinch = true
+			dist := math.Abs(float64(e.Touches[0].Position.X - e.Touches[1].Position.X))
+			// A trackpad pinch arrives as a GestureEvent too. Let onPinch
+			// own the scale when it does, so the two paths do not add up.
+			if in.pinched {
+				in.touch.lastDist = dist
+				return
+			}
+			at := in.xAt(float64(e.Touches[0].Position.X+e.Touches[1].Position.X) / 2)
+			if in.touch.lastDist > 0 && dist > 0 {
+				in.setView(in.zoom(in.touch.lastDist/dist, at))
+			}
+			in.touch.lastDist = dist
+			return
+		}
+		if len(e.Touches) == 1 {
+			x := in.xAt(float64(e.Touches[0].Position.X))
+			if in.touch.pinch {
+				// One finger left the pinch: start a fresh pan here.
+				in.touch.pinch = false
+				in.touch.view = in.ownView()
+				in.touch.lastX = x
+				return
+			}
+			in.setView(in.touch.view.PanX(in.touch.lastX - x))
+		}
+	case core.TouchEnd, core.TouchCancel:
+		in.touch = touchState{}
+		in.drag = dragState{}
+		in.pinched = false
 	}
 }
 
@@ -203,15 +385,16 @@ func (in *input) onWheel(e core.WheelEvent) {
 		step /= 4
 	}
 	at := in.xAt(float64(e.Position.X))
-	in.setView(in.ownView().ZoomX(math.Pow(1.25, step/100), at))
+	in.setView(in.zoom(math.Pow(1.25, step/100), at))
 }
 
 func (in *input) onPinch(e core.GestureEvent) {
 	if e.Value <= 0 {
 		return
 	}
+	in.pinched = true
 	at := in.xAt(float64(e.Position.X))
-	in.setView(in.ownView().ZoomX(1/float64(e.Value), at))
+	in.setView(in.zoom(1/float64(e.Value), at))
 }
 
 // onAccessibilityAction steps the cursor through the visible range, as a
@@ -220,17 +403,16 @@ func (in *input) onAccessibilityAction(name string) {
 	vx := in.xView()
 	x := in.hover.Get()
 	if math.IsNaN(x) {
-		x = vx.Lo + vx.Span()/2
+		x = in.c.xAtFrac(0.5, vx)
 	}
-	step := vx.Span() / 20
+	f := in.c.xFrac(x, vx)
 	switch name {
 	case "increment":
-		x += step
+		f += 0.05
 	case "decrement":
-		x -= step
+		f -= 0.05
 	default:
 		return
 	}
-	x = min(max(x, vx.Lo), vx.Hi)
-	in.setCursor(x)
+	in.setCursor(in.c.xAtFrac(min(max(f, 0), 1), vx))
 }

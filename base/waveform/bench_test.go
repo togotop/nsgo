@@ -19,12 +19,12 @@ func BenchmarkWaveformDecimate(b *testing.B) {
 			d := &data{dx: 0.001}
 			d.append(samples(c.n))
 			vx := d.extent()
-			sc := d.scanFor(vx, px)
+			sc := d.scanFor(vx, px, false)
 			var out []float32
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
-				out = columns(sc, vx, px, out)
+				out = columns(sc, vx, px, false, out)
 			}
 			b.ReportMetric(float64(len(out)/2), "points/frame")
 			if sc.kind == scanBuckets {

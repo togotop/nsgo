@@ -26,14 +26,41 @@ type Series struct {
 	Head   int
 	Axis   int
 
-	Color  core.Color
-	Width  core.Points
-	Fill   core.Color
+	Color core.Color
+	Width core.Points
+	Fill  core.Color
+	// Offset and Scale place the line vertically: a sample reads as
+	// (v - base) * Scale + Offset, where base is the window's mean under
+	// AC coupling and zero otherwise. A zero Scale means 1 and Invert
+	// turns it negative, so a channel can be moved, zoomed and flipped
+	// like a scope's. The fit follows, and the axis shows the result.
+	Offset float64
+	Scale  float64
+	Invert bool
+	AC     bool
 	Hidden bool
 
 	Class     string
 	Style     core.Style
 	StyleFunc func() core.Style
+}
+
+// scaleY is the factor the samples are multiplied by: Scale, or 1 when it
+// is zero, turned negative by Invert.
+func (s Series) scaleY() float64 {
+	v := s.Scale
+	if v == 0 {
+		v = 1
+	}
+	if s.Invert {
+		v = -v
+	}
+	return v
+}
+
+// transform is where a sample sits vertically after the channel's controls.
+func (s Series) transform(v, base float64) float64 {
+	return (v-base)*s.scaleY() + s.Offset
 }
 
 // Band shades a range of y across the plot, under the series: a tolerance

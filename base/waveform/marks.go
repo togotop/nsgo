@@ -35,7 +35,9 @@ func (p parts) frac(x float64) core.Length {
 	if f == nil || f.vx.Span() <= 0 {
 		return core.Pct(0)
 	}
-	return core.Pct(float32((x - f.vx.Lo) / f.vx.Span() * 100))
+	// xFrac keeps the cross line, tooltip and notes on the pointer on a
+	// log x axis, where a linear fraction would put them elsewhere.
+	return core.Pct(float32(p.c.xFrac(x, f.vx) * 100))
 }
 
 // valueText is a series' reading at x, or its newest sample without a
@@ -97,6 +99,7 @@ func (p parts) nodes() []core.Node {
 	}
 	out = append(out, p.notes()...)
 	out = append(out, p.bandLabels()...)
+	out = append(out, p.readings()...)
 	return out
 }
 
@@ -141,6 +144,17 @@ func (p parts) markers() []core.Node {
 				return core.Style{Left: core.Pct(float32(m.Get() * 100))}
 			},
 		})
+		if label := p.c.MarkLabels[i]; label != "" {
+			out = append(out, core.Text{
+				Content: label,
+				Class:   p.c.MarkClass,
+				StyleFunc: func() core.Style {
+					return core.Style{Position: core.Absolute,
+						Left: core.Pct(float32(m.Get() * 100)), Top: core.Pt(2),
+						Margin: core.Edges{Left: 3}}
+				},
+			})
+		}
 	}
 	out = append(out, core.Text{
 		Class: p.c.MarkClass,
@@ -154,8 +168,11 @@ func (p parts) markers() []core.Node {
 			if f == nil {
 				return ""
 			}
-			a := f.vx.Lo + fa*f.vx.Span()
-			b := f.vx.Lo + fb*f.vx.Span()
+			// The markers are screen fractions; turn them back into data x
+			// in the view's own scale, so their readings agree with the
+			// interval the automatic measurements use.
+			a := p.c.xAtFrac(fa, f.vx)
+			b := p.c.xAtFrac(fb, f.vx)
 			dx := math.Abs(b - a)
 			var reading string
 			if f := p.c.axisAt(0).Format; f != nil {
@@ -177,6 +194,87 @@ func (p parts) markers() []core.Node {
 		},
 	})
 	return out
+}
+
+// readings shows each automatic measurement, its label and value, in a
+// column over the plot's top right. A reading updates as the window moves,
+// so a following chart's numbers keep pace with what it shows.
+func (p parts) readings() []core.Node {
+	if len(p.c.Measurements) == 0 {
+		return nil
+	}
+	items := make([]core.Node, 0, len(p.c.Measurements))
+	for i, m := range p.c.Measurements {
+		mm := m
+		items = append(items, core.Text{
+			TestID:      derivedID(p.c.TestID, "-m"+strconv.Itoa(i)),
+			ContentFunc: func() string { return p.readingText(mm) },
+		})
+	}
+	return []core.Node{core.View{
+		TestID:        derivedID(p.c.TestID, "-readings"),
+		Class:         p.c.MeasurementClass,
+		Style:         core.Style{Position: core.Absolute, Right: core.Pt(4), Top: core.Pt(2), Gap: 2}.Merge(p.c.MeasurementStyle),
+		PointerEvents: core.PointerEventsNone,
+		Children:      items,
+	}}
+}
+
+// readingText is one measurement's label and value, or empty when the
+// window has too little of the series to read it.
+func (p parts) readingText(m Measurement) string {
+	f := p.f.Get()
+	if f == nil {
+		return ""
+	}
+	vx := f.vx
+	if m.Over == MeasureMarkers {
+		a, b := p.markA.Get(), p.markB.Get()
+		if math.IsNaN(a) || math.IsNaN(b) {
+			return ""
+		}
+		x1, x2 := p.c.xAtFrac(a, f.vx), p.c.xAtFrac(b, f.vx)
+		vx = Range{min(x1, x2), max(x1, x2)}
+	}
+	if m.Source < 0 || m.Source >= len(f.series) {
+		return ""
+	}
+	// Read from the very points the line draws, already reduced to the
+	// extremes of each pixel column. Widening the retained history then
+	// costs a reading nothing, and a peak a column covers is never lost.
+	pts := f.series[m.Source].pts
+	xs := make([]float64, 0, len(pts)/2)
+	ys := make([]float64, 0, len(pts)/2)
+	for i := 0; i+1 < len(pts); i += 2 {
+		col, v := float64(pts[i]), float64(pts[i+1])
+		if col < 0 || col > float64(f.px) || v != v {
+			continue
+		}
+		x := p.c.xAtFrac(col/float64(f.px), f.vx)
+		if x < vx.Lo || x > vx.Hi {
+			continue
+		}
+		xs = append(xs, x)
+		ys = append(ys, v)
+	}
+	v, ok := measureFrom(m, xs, ys, vx)
+	if !ok {
+		return ""
+	}
+	var value string
+	if m.Format != nil {
+		value = m.Format(v)
+	} else {
+		var format func(float64) string
+		if m.Source >= 0 && m.Source < len(p.states) {
+			format = p.c.axisAt(p.states[m.Source].axis).Format
+		}
+		value = formatValue(v, format)
+	}
+	if m.Label == "" {
+		return value
+	}
+	return m.Label + " " + value
 }
 
 func (p parts) notes() []core.Node {

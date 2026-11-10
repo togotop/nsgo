@@ -528,6 +528,9 @@ const (
 	textDemoPlotDetail
 	textDemoWaveform
 	textDemoWaveformDetail
+	textDemoWaveformRun
+	textDemoWaveformStop
+	textDemoWaveformSingle
 	textDemoProgress
 	textDemoProgressDetail
 	textDemoResizable
@@ -2852,6 +2855,9 @@ var keyOfText = [numTexts]string{
 	"demoPlotDetail",
 	"demoWaveform",
 	"demoWaveformDetail",
+	"demoWaveformRun",
+	"demoWaveformStop",
+	"demoWaveformSingle",
 	"demoProgress",
 	"demoProgressDetail",
 	"demoResizable",
@@ -5174,6 +5180,9 @@ var textsEn = i18n.NewTexts(""+
 	"A line and area plot with hover, grid lines and motion, sparklines in a list"+
 	"Waveform"+
 	"Live channels decimated to a pixel column, a following window, cursors and measurements"+
+	"Run"+
+	"Stop"+
+	"Single"+
 	"Progress"+
 	"Bars, rings, spinners, meters and skeletons"+
 	"Resizable"+
@@ -7493,6 +7502,9 @@ var textsEn = i18n.NewTexts(""+
 		76,
 		8,
 		87,
+		3,
+		4,
+		6,
 		8,
 		43,
 		9,
@@ -9815,6 +9827,9 @@ var textsZhHans = i18n.NewTexts(""+
 	"带悬停、网格线和动效的折线面积图，列表中的迷你图"+
 	"波形"+
 	"按像素列降采样的实时通道，带滚动窗口、游标与测量"+
+	"运行"+
+	"停止"+
+	"单次"+
 	"进度"+
 	"进度条、进度环、加载指示器、仪表与骨架屏"+
 	"可调整大小"+
@@ -12134,6 +12149,9 @@ var textsZhHans = i18n.NewTexts(""+
 		72,
 		6,
 		72,
+		6,
+		6,
+		6,
 		6,
 		60,
 		15,
@@ -15654,6 +15672,27 @@ func DemoWaveformDetail(cx *core.Scope) string { return For(cx).DemoWaveformDeta
 
 // DemoWaveformDetail is the package's DemoWaveformDetail in the language of msgs.
 func (msgs Messages) DemoWaveformDetail() string { return msgs.text(textDemoWaveformDetail) }
+
+// DemoWaveformRun says "Run"
+// in the language the app shows under cx.
+func DemoWaveformRun(cx *core.Scope) string { return For(cx).DemoWaveformRun() }
+
+// DemoWaveformRun is the package's DemoWaveformRun in the language of msgs.
+func (msgs Messages) DemoWaveformRun() string { return msgs.text(textDemoWaveformRun) }
+
+// DemoWaveformStop says "Stop"
+// in the language the app shows under cx.
+func DemoWaveformStop(cx *core.Scope) string { return For(cx).DemoWaveformStop() }
+
+// DemoWaveformStop is the package's DemoWaveformStop in the language of msgs.
+func (msgs Messages) DemoWaveformStop() string { return msgs.text(textDemoWaveformStop) }
+
+// DemoWaveformSingle says "Single"
+// in the language the app shows under cx.
+func DemoWaveformSingle(cx *core.Scope) string { return For(cx).DemoWaveformSingle() }
+
+// DemoWaveformSingle is the package's DemoWaveformSingle in the language of msgs.
+func (msgs Messages) DemoWaveformSingle() string { return msgs.text(textDemoWaveformSingle) }
 
 // DemoProgress says "Progress"
 // in the language the app shows under cx.

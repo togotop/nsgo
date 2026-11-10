@@ -51,20 +51,27 @@ func (v Viewport) PanX(dx float64) Viewport {
 	return v
 }
 
-// Clamp keeps the view within half a screen of empty space beyond each end
-// of the data, as panning past an edge settles.
+// Clamp slides the view within the data without ever changing its width.
+// A view wider than the data keeps its width and pins its right end to the
+// newest sample, so a periodic trim of the history cannot make the chart
+// breathe between two scales.
 func (v Viewport) Clamp(data Range) Viewport {
 	if !v.X.Valid() || !data.Valid() {
 		return v
 	}
 	span := v.X.Span()
-	if span >= data.Span() {
-		v.X = data
-		return v
-	}
-	lo := min(max(v.X.Lo, data.Lo-span/2), data.Hi+span/2-span)
+	lo := min(max(v.X.Lo, data.Lo), data.Hi-span)
 	v.X = Range{lo, lo + span}
 	return v
+}
+
+// followView slides a view the user zoomed or panned along with the newest
+// sample, keeping its width. anchor is how far its right end sat behind the
+// newest sample when the user set it, so a running chart scrolls at a
+// steady rate instead of sitting at an absolute x range.
+func followView(v Viewport, data Range, anchor float64) Range {
+	hi := data.Hi - anchor
+	return Range{hi - v.X.Span(), hi}
 }
 
 // Fit returns the view of the whole data range.
@@ -121,6 +128,9 @@ func (a Axis) logTicks(lo, hi float64, count int) []Tick {
 	var out []Tick
 	for k := first; k <= last && len(out) < 64; k++ {
 		v := math.Pow(10, k)
+		if v < lo || v > hi {
+			continue
+		}
 		out = append(out, Tick{At: (math.Log10(v) - math.Log10(lo)) / (math.Log10(hi) - math.Log10(lo)),
 			Value: v, Label: formatValue(v, a.Format)})
 	}

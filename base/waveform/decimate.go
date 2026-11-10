@@ -73,15 +73,30 @@ func (sc scan) indexAt(x float64) int {
 // pixel column of a plot px wide, as flat x,y pairs: x is the column, y a
 // value in the data's units. One item beyond each edge lets the line reach
 // the border. It appends to out, so a steady frame allocates nothing.
-func columns(sc scan, vx Range, px int, out []float32) []float32 {
+func columns(sc scan, vx Range, px int, logX bool, out []float32) []float32 {
 	out = out[:0]
 	if sc.n == 0 || px <= 0 || !vx.Valid() {
 		return out
 	}
 	from := max(0, sc.indexAt(vx.Lo)-1)
 	to := min(sc.n, sc.indexAt(vx.Hi)+1)
-	scale := float64(px) / vx.Span()
-	col := func(i int) int { return int(math.Floor((sc.x(i) - vx.Lo) * scale)) }
+	var col func(i int) int
+	if logX && vx.Lo > 0 {
+		llo, lhi := math.Log10(vx.Lo), math.Log10(vx.Hi)
+		if lhi > llo {
+			col = func(i int) int {
+				x := sc.x(i)
+				if x <= 0 {
+					return -1
+				}
+				return int(math.Floor((math.Log10(x) - llo) / (lhi - llo) * float64(px)))
+			}
+		}
+	}
+	if col == nil {
+		scale := float64(px) / vx.Span()
+		col = func(i int) int { return int(math.Floor((sc.x(i) - vx.Lo) * scale)) }
+	}
 	// A NaN item opens a break; the next finite column writes a NaN pair
 	// into the output, which the drawing reads as the start of a new
 	// segment, so a gap in the data is a gap in the line.
@@ -155,6 +170,7 @@ type geomKey struct {
 	version uint64
 	n       int
 	x0, dx  float64
+	logX    bool
 }
 
 // geom is one series' reduced points for the last frame of a view.
@@ -170,6 +186,6 @@ func (g *geom) get(key geomKey, sc scan, vx Range, px int) []float32 {
 		return g.points
 	}
 	g.key, g.ready = key, true
-	g.points = columns(sc, vx, px, g.points)
+	g.points = columns(sc, vx, px, key.logX, g.points)
 	return g.points
 }

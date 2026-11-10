@@ -467,11 +467,13 @@ These items wait for community contributions, and a change to one backend record
 
 ## Waveforms
 
-What `base/waveform` leaves out of mygogo's `ui/chart/plot` ([components](architecture/components.md#waveforms)), in the order to build it.
+What `base/waveform` leaves out of mygogo's `ui/chart/plot`, and gaps it still has ([components](architecture/components.md#waveforms)), in the order to build it.
 
 | Item | Reference | Done when |
 | --- | --- | --- |
 | An image of a chart | mygogo's `plot.PNG` | `Chart.PNG` returns a PNG of what the chart shows: a drawing is played by a platform and `core` has no offscreen image of one, so each backend renders the canvas into one, on a goroutine of its own as a shader's drawable does |
+| Bounding a plain live source | — | A `Chart` with a `Source` and neither `Follow` nor `TimeBase` sets no `Retain` until the user zooms, so a chart nobody interacts with grows without bound; give it a base window too |
+| Exact triggering on a very wide view | — | The edge search strides past 65,536 sample positions, so a wide zoom can skip a narrow edge; find edges in the reduced pixel-column points instead |
 
 ## TSX and dynamic delivery
 

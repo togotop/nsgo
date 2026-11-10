@@ -79,6 +79,19 @@ func (d *data) indexAt(x float64) int {
 	return min(max(i, 0), n-1)
 }
 
+// clone is a copy of the samples and their pyramid, which a stopped chart
+// draws while its source keeps filling.
+func (d *data) clone() *data {
+	c := &data{x0: d.x0, dx: d.dx, version: d.version}
+	c.y = append([]float32(nil), d.y...)
+	if d.xs != nil {
+		c.xs = append([]float64(nil), d.xs...)
+	} else {
+		c.py.extend(c.y, 0, c.x0, c.dx)
+	}
+	return c
+}
+
 // extent is the x range the samples cover.
 func (d *data) extent() Range {
 	if len(d.y) == 0 {
@@ -105,13 +118,25 @@ func (d *data) valueAt(x float64) (float32, bool) {
 // scanFor returns how to walk the column for vx at px pixels wide: the raw
 // samples when the view shows few of them, else the buckets of the level
 // that fits a pixel column. An irregular x has no bucket grid.
-func (d *data) scanFor(vx Range, px int) scan {
+func (d *data) scanFor(vx Range, px int, logX bool) scan {
 	raw := scan{kind: scanRaw, y: d.y, xs: d.xs, x0: d.x0, dx: d.dx, n: len(d.y)}
 	if d.xs != nil {
 		return raw
 	}
 	from, to := d.indexAt(vx.Lo), d.indexAt(vx.Hi)
 	perPixel := float64(max(to-from, 1)) / float64(max(px, 1))
+	if logX && vx.Lo > 0 && d.dx > 0 {
+		decades := math.Log10(vx.Hi) - math.Log10(vx.Lo)
+		if decades > 0 {
+			// A pixel column at the right of a log axis covers many more
+			// samples than one at the left. A level for the average leaves
+			// too many buckets on the right; one for the densest column
+			// loses detail on the left. Balance the two in log space, so
+			// the scan stays O(width) at both ends.
+			dense := vx.Hi * math.Ln10 * decades / (float64(max(px, 1)) * d.dx)
+			perPixel = math.Sqrt(perPixel * max(perPixel, dense))
+		}
+	}
 	level := levelFor(perPixel)
 	if level < 0 || level >= len(d.py.levels) {
 		return raw

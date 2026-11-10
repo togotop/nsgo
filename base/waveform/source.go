@@ -75,6 +75,13 @@ func (s *Source) Retain(span float64) {
 	}
 }
 
+// resizeRetain gives history back when a chart returns to a narrower view.
+// Retain only grows, so a zoom out would otherwise keep its wider window
+// forever. Call it on the engine; a chart does it on a double click.
+func (s *Source) resizeRetain(span float64) {
+	s.retain = span
+}
+
 // Reset drops every sample and starts a new column. Call it on the engine.
 // A batch published before the call belongs to the old column and goes
 // with it.

@@ -53,6 +53,12 @@ func (w Waveform) Render(*core.Scope) core.Node {
 	}
 	c.AxisStyle = core.Style{FontSize: 11}.Merge(c.AxisStyle)
 	c.LegendStyle = core.Style{FontSize: 11}.Merge(c.LegendStyle)
+	c.MeasurementStyle = core.Style{FontSize: 11}.Merge(c.MeasurementStyle)
+	if c.TriggerColor == 0 {
+		// A fixed chart color, as the grid's is: the trigger line is a
+		// recorded drawing operation, not part of the theme's look.
+		c.TriggerColor = core.RGBA(0xcc3333, 0.8)
+	}
 	cross := core.RGBA(0x888888, 0.45)
 	if w.Variant == WaveformAccent {
 		cross = core.RGBA(0x288cf0, 0.6)

@@ -3,6 +3,10 @@ package waveform
 import (
 	"math"
 	"testing"
+
+	"github.com/nsgo-dev/nsgo/core"
+	"github.com/nsgo-dev/nsgo/internal/driver"
+	"github.com/nsgo-dev/nsgo/nsgotest"
 )
 
 // samples returns n samples of two tones, with a spike every 97 samples so
@@ -32,7 +36,7 @@ func TestColumnsKeepsEachColumnsExtremes(t *testing.T) {
 	// places a bucket at its first sample's column, which is the LOD's
 	// approximation, checked separately.
 	raw := scan{kind: scanRaw, y: d.y, x0: d.x0, dx: d.dx, n: len(d.y)}
-	pts := columns(raw, vx, px, nil)
+	pts := columns(raw, vx, px, false, nil)
 	type pair struct {
 		lo, hi float32
 		ok     bool
@@ -117,8 +121,8 @@ func TestDecimationIsOWidth(t *testing.T) {
 	for _, n := range []int{100000, 1000000} {
 		d := columnData(n)
 		vx := d.extent()
-		sc := d.scanFor(vx, px)
-		pts := columns(sc, vx, px, nil)
+		sc := d.scanFor(vx, px, false)
+		pts := columns(sc, vx, px, false, nil)
 		if points := len(pts) / 2; points > 2*px+32 {
 			t.Errorf("%d samples: %d points, want at most about %d", n, points, 2*px)
 		}
@@ -134,14 +138,14 @@ func TestReuseOfGeom(t *testing.T) {
 	vx := d.extent()
 	key := geomKey{lo: vx.Lo, hi: vx.Hi, px: px, version: d.version, n: len(d.y), x0: d.x0, dx: d.dx}
 	var g geom
-	first := g.get(key, d.scanFor(vx, px), vx, px)
+	first := g.get(key, d.scanFor(vx, px, false), vx, px)
 	firstCopy := append([]float32(nil), first...)
-	again := g.get(key, d.scanFor(vx, px), vx, px)
+	again := g.get(key, d.scanFor(vx, px, false), vx, px)
 	if len(again) != len(firstCopy) {
 		t.Fatal("a reused geom changed length")
 	}
 	key.version++
-	_ = g.get(key, d.scanFor(vx, px), vx, px)
+	_ = g.get(key, d.scanFor(vx, px, false), vx, px)
 	if len(g.points) == 0 {
 		t.Fatal("a new version did not decimate again")
 	}
@@ -155,7 +159,7 @@ func TestNaNsBreakTheLine(t *testing.T) {
 	}
 	d.append(y)
 	vx := d.extent()
-	pts := columns(d.scanFor(vx, 100), vx, 100, nil)
+	pts := columns(d.scanFor(vx, 100, false), vx, 100, false, nil)
 	// The finite runs, split by the NaN pair a break writes.
 	runs, inRun := 0, false
 	for i := 0; i+1 < len(pts); i += 2 {
@@ -180,11 +184,11 @@ func TestIrregularXScansRawSamples(t *testing.T) {
 		d.xs[i] = float64(i) * float64(i) * 0.001
 	}
 	vx := d.extent()
-	sc := d.scanFor(vx, 100)
+	sc := d.scanFor(vx, 100, false)
 	if sc.kind != scanRaw {
 		t.Fatal("an irregular x used buckets, which assume a uniform grid")
 	}
-	pts := columns(sc, vx, 100, nil)
+	pts := columns(sc, vx, 100, false, nil)
 	if len(pts) == 0 {
 		t.Fatal("an irregular x drew nothing")
 	}
@@ -205,6 +209,60 @@ func TestViewport(t *testing.T) {
 	clamped := Viewport{X: Range{-100, -90}}.Clamp(Range{0, 10})
 	if clamped.X.Lo != 0 {
 		t.Errorf("Clamp: %v", clamped.X)
+	}
+}
+
+// A Source's Retain trims a whole stretch at once, so the data's span
+// swings between retained and twice retained. Clamping must never take the
+// data's span as the view's width, or a running chart breathes between two
+// scales as it scrolls.
+func TestClampKeepsItsWidthAsDataSpanChanges(t *testing.T) {
+	v := Viewport{X: Range{0, 0.15}}
+	for _, data := range []Range{
+		{0, 0.2},    // data wider than the view
+		{0.05, 0.2}, // a trim left the data narrower
+		{0.1, 0.12}, // much narrower still
+		{0, 0.1},    // the narrowest Retain leaves
+	} {
+		if got := v.Clamp(data).X.Span(); math.Abs(got-0.15) > 1e-12 {
+			t.Fatalf("clamping over %v changed the width to %v", data, got)
+		}
+	}
+}
+
+// followView keeps the width and moves the view by exactly the newest
+// sample's advance, whatever the data's span did in between.
+func TestFollowViewSlidesAtASteadyRate(t *testing.T) {
+	v := Viewport{X: Range{1, 1.5}}
+	const anchor = 0.2
+	first := followView(v, Range{0, 1.7}, anchor)
+	second := followView(v, Range{0.1, 1.9}, anchor)
+	if math.Abs(first.Span()-0.5) > 1e-12 || math.Abs(second.Span()-0.5) > 1e-12 {
+		t.Fatalf("the view changed width: %v -> %v", first, second)
+	}
+	if d := second.Lo - first.Lo; math.Abs(d-0.2) > 1e-12 {
+		t.Fatalf("the view advanced %v, want the newest sample's 0.2", d)
+	}
+}
+
+// Retain swings the data's span between one and two retained windows as it
+// trims. A zoomed view must keep its width and advance by the same step on
+// every frame through those trims, neither compressing nor speeding up.
+func TestZoomedViewScrollsSteadilyAcrossTrims(t *testing.T) {
+	v := Viewport{X: Range{10, 10.15}}
+	const anchor = 0.02
+	var prevHi float64
+	for i := range 20 {
+		hi := 10.2 + float64(i)*0.01
+		lo := hi - (0.1 + 0.1*float64(i%10)/10)
+		r := followView(v, Range{lo, hi}, anchor)
+		if math.Abs(r.Span()-0.15) > 1e-12 {
+			t.Fatalf("frame %d: the view's width became %v", i, r.Span())
+		}
+		if i > 0 && math.Abs((r.Hi-prevHi)-0.01) > 1e-12 {
+			t.Fatalf("frame %d: the view advanced %v, want 0.01", i, r.Hi-prevHi)
+		}
+		prevHi = r.Hi
 	}
 }
 
@@ -301,5 +359,36 @@ func TestValueAt(t *testing.T) {
 	}
 	if _, ok := d.valueAt(-1); ok {
 		t.Fatal("a value before the data read as present")
+	}
+}
+
+// A zoom-out must widen the history the source keeps, or the view fills
+// with empty space: only the old, short stretch of samples is left to draw.
+func TestZoomWidensTheRetainedHistory(t *testing.T) {
+	src := NewSource(0, 0.001)
+	for range 20 {
+		src.Push(samples(1000))
+	}
+	app := nsgotest.Start(t, func(cx *core.Scope) core.Node {
+		return Chart{
+			TestID:     "wave",
+			Series:     []Series{{Source: src}},
+			TimeBase:   0.005,
+			DivisionsX: 10,
+			Style:      core.Style{Width: core.Pt(600), Height: core.Pt(300)},
+		}
+	}, nsgotest.Size(800, 600))
+	app.Settle()
+	before := src.d.extent().Span()
+	app.Wheel("id:wave", driver.Point{Y: 400}, driver.Modifiers{Control: true})
+	app.Settle()
+	app.Post(func() {
+		for range 20 {
+			src.Push(samples(1000))
+		}
+	})
+	app.Settle()
+	if after := src.d.extent().Span(); after <= before {
+		t.Fatalf("a zoom-out did not widen the history: %v -> %v", before, after)
 	}
 }

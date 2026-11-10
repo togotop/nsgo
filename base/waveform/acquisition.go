@@ -6,7 +6,9 @@ import (
 	"github.com/nsgo-dev/nsgo/core"
 )
 
-// maxTriggerSweep is the most sample positions an edge search looks at.
+// maxTriggerSweep bounds how many pyramid buckets an edge search sweeps.
+// A level whose bucket count fits under it keeps a wide view's search
+// cheap without striding past narrow edges.
 const maxTriggerSweep = 1 << 16
 
 // TriggerEdge is the slope a trigger fires on.
@@ -106,8 +108,57 @@ func (c Chart) triggerAt(states []*seriesState, width float64) (float64, bool) {
 	return c.triggerAtBefore(states, width, math.Inf(1))
 }
 
+// triggerLevel picks the finest pyramid level whose bucket count stays
+// under maxTriggerSweep, or -1 when the column has no pyramid (an
+// irregular x, or too few samples). Those buckets are coarse enough to
+// bound a wide sweep but fine enough that a hit is cheap to verify.
+func triggerLevel(n, levels int) int {
+	if levels == 0 {
+		return -1
+	}
+	for l, sh := range bucketShifts {
+		if l >= levels {
+			break
+		}
+		if n>>sh <= maxTriggerSweep {
+			return l
+		}
+	}
+	return levels - 1
+}
+
+// triggerInSamples walks the samples in (from, to) from the newest back,
+// and returns the x of the first that crosses level on the edge's slope.
+// A NaN on either side breaks the line there, so it is no edge.
+func triggerInSamples(d *data, from, to int, level float64, edge TriggerEdge) (float64, bool) {
+	for i := to - 1; i > from; i-- {
+		a, b := d.y[i-1], d.y[i]
+		if a != a || b != b {
+			continue
+		}
+		up := float64(a) < level && float64(b) >= level
+		down := float64(a) >= level && float64(b) < level
+		var hit bool
+		switch edge {
+		case TriggerRising:
+			hit = up
+		case TriggerFalling:
+			hit = down
+		default:
+			hit = up || down
+		}
+		if hit {
+			return d.xAt(i), true
+		}
+	}
+	return 0, false
+}
+
 // triggerAtBefore is triggerAt over edges no later than limit, so a chart
-// waits until enough samples follow an edge to fill the view.
+// waits until enough samples follow an edge to fill the view. A wide view
+// is swept through the pyramid's buckets: a bucket's extremes say whether
+// it can hold an edge at all, and only those are searched sample by
+// sample, so a narrow edge deep in a long history is never skipped.
 func (c Chart) triggerAtBefore(states []*seriesState, width, limit float64) (float64, bool) {
 	t := c.Trigger
 	if t == nil || t.Source < 0 || t.Source >= len(states) {
@@ -117,7 +168,8 @@ func (c Chart) triggerAtBefore(states []*seriesState, width, limit float64) (flo
 	if st.d == nil || len(st.d.y) < 2 {
 		return 0, false
 	}
-	e := st.d.extent()
+	d := st.d
+	e := d.extent()
 	if !e.Valid() {
 		return 0, false
 	}
@@ -125,38 +177,48 @@ func (c Chart) triggerAtBefore(states []*seriesState, width, limit float64) (flo
 	if span <= 0 {
 		span = e.Span() / 4
 	}
-	from := st.d.indexAt(e.Hi - 2*span)
-	to := len(st.d.y)
+	from := d.indexAt(e.Hi - 2*span)
+	to := len(d.y)
 	if limit < e.Hi {
-		to = min(to, st.d.indexAt(limit)+1)
+		to = min(to, d.indexAt(limit)+1)
 	}
 	level := t.Level
-	// A wide view can hold a long history. Cap the sweep at a fixed number
-	// of looks, sampling in strides when it is longer, so finding an edge
-	// never walks every retained sample.
-	step := 1
-	if sweep := to - from; sweep > maxTriggerSweep {
-		step = (sweep + maxTriggerSweep - 1) / maxTriggerSweep
+
+	lvl := triggerLevel(len(d.y), len(d.py.levels))
+	if lvl < 0 {
+		return triggerInSamples(d, from, to, level, t.Edge)
 	}
-	for i := to - 1; i > from; i -= step {
-		j := max(i-step, from)
-		a, b := st.d.y[j], st.d.y[i]
-		if a != a || b != b {
+	shift := bucketShifts[lvl]
+	buckets := d.py.levels[lvl]
+	for b := len(buckets) - 1; b >= 0; b-- {
+		lo := b << shift
+		if lo >= to {
 			continue
 		}
-		up := float64(a) < level && float64(b) >= level
-		down := float64(a) >= level && float64(b) < level
-		var hit bool
-		switch t.Edge {
-		case TriggerRising:
-			hit = up
-		case TriggerFalling:
-			hit = down
-		default:
-			hit = up || down
+		hi := min(lo+(1<<shift), len(d.y))
+		if hi <= from {
+			break
 		}
-		if hit {
-			return st.d.xAt(i), true
+		mm := buckets[b]
+		if mm.lo != mm.lo { // every sample in the bucket is NaN
+			continue
+		}
+		// An edge may straddle the bucket's left border: y[lo-1] is in
+		// the bucket before it. Include that sample in the extremes, or
+		// a crossing that lands exactly on a border would be skipped.
+		loVal, hiVal := float64(mm.lo), float64(mm.hi)
+		if lo > 0 {
+			if p := d.y[lo-1]; p == p {
+				f := float64(p)
+				loVal, hiVal = min(loVal, f), max(hiVal, f)
+			}
+		}
+		if hiVal < level || loVal >= level {
+			continue
+		}
+		start := max(lo-1, from)
+		if x, ok := triggerInSamples(d, start, min(hi, to), level, t.Edge); ok {
+			return x, true
 		}
 	}
 	return 0, false

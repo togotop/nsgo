@@ -97,6 +97,16 @@ func columns(sc scan, vx Range, px int, logX bool, out []float32) []float32 {
 		scale := float64(px) / vx.Span()
 		col = func(i int) int { return int(math.Floor((sc.x(i) - vx.Lo) * scale)) }
 	}
+	// An item on or just past an edge belongs to that edge's column: its
+	// extreme is the line's own, and dropping it would lose the highest
+	// value the view holds, as a spectrum's first bin often is.
+	raw := col
+	col = func(i int) int {
+		if c := raw(i); c > 0 {
+			return min(c, px)
+		}
+		return 0
+	}
 	// A NaN item opens a break; the next finite column writes a NaN pair
 	// into the output, which the drawing reads as the start of a new
 	// segment, so a gap in the data is a gap in the line.

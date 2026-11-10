@@ -52,6 +52,10 @@ type Chart struct {
 	// XLog draws x on a logarithmic scale, for frequencies and other
 	// quantities that span decades. The view's low end must be positive.
 	XLog bool
+	// WheelZoom zooms x on a wheel without a modifier, for a chart outside
+	// a scroll view where the wheel has nothing else to do. A chart inside
+	// one leaves it false so the wheel scrolls the page.
+	WheelZoom bool
 	// View is where the chart starts. A zoom or a pan the user makes
 	// stays in the component: an app hears it with OnViewChange but
 	// cannot set it back into a running chart.
@@ -879,7 +883,11 @@ func axisLabels(c Chart, f *core.Memo[*frame], x bool, axis int, left core.Point
 				s.Left = core.Pt(-left)
 				s.Width = core.Pt(left - 8)
 			} else {
+				// A label box that starts past the plot's edge has no width
+				// of its own, so it must be given one: without it, a text
+				// shrink-fits to a single character a line.
 				s.Left = core.Pct(100)
+				s.Width = core.Pt(axisRoom - 4)
 				s.Margin = core.Edges{Left: core.Points(axis-1)*axisRoom + 4}
 			}
 			out = append(out, core.Text{
@@ -920,7 +928,15 @@ func axisLabels(c Chart, f *core.Memo[*frame], x bool, axis int, left core.Point
 						s := core.Style{Position: core.Absolute}
 						switch {
 						case x:
+							// The last tick sits on the plot's edge, where a
+							// box starting there has no width to write in:
+							// it is given one and ends at the edge instead.
 							s.Left = core.Pct(float32(t.At * 100))
+							if t.At >= 0.96 {
+								s.Width = core.Pt(axisRoom)
+								s.Margin = core.Edges{Left: -axisRoom, Top: 4}
+								s.TextAlign = core.TextAlignEnd
+							}
 							s.Top = core.Pct(100)
 							s.Margin = core.Edges{Top: 4}
 						case axis == 0:
@@ -930,6 +946,7 @@ func axisLabels(c Chart, f *core.Memo[*frame], x bool, axis int, left core.Point
 							s.Margin = core.Edges{Top: -7}
 						default:
 							s.Left = core.Pct(100)
+							s.Width = core.Pt(axisRoom - 4)
 							s.Top = core.Pct(float32((1 - t.At) * 100))
 							s.Margin = core.Edges{Left: core.Points(axis-1)*axisRoom + 4, Top: -7}
 						}

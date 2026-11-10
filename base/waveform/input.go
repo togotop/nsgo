@@ -11,6 +11,7 @@ import (
 // press near a measurement marker moves it.
 type dragState struct {
 	active bool
+	mouse  bool // the press is the mouse's, not a finger's echo of it
 	zoom   bool
 	sel    bool // Alt: a drag sets the markers' interval
 	marker int  // 0: none, 1: A, 2: B
@@ -64,13 +65,18 @@ func (in *input) ownView() Viewport { return Viewport{X: in.xView()} }
 
 // xAt turns a pointer's x in the root view into a data x. The plot is
 // inset by axisRoom on the left, and its width is what the canvas reports.
-func (in *input) xAt(px float64) float64 {
+func (in *input) xAt(px float64) float64 { return in.xAtIn(px, in.xView()) }
+
+// xAtIn turns a pointer's x in the root view into a data x in the view vx.
+// A drag maps the pointer in the view it started from: mapping it in the
+// view it is moving would feed each step's own pan back into the next
+// step's reading, and the waveform would shake instead of sliding.
+func (in *input) xAtIn(px float64, vx Range) float64 {
 	w := float64(in.plotSize.Get().Width)
 	if w <= 0 {
 		return 0
 	}
 	f := min(max((px-float64(axisRoom))/w, 0), 1)
-	vx := in.xView()
 	return in.c.xAtFrac(f, vx)
 }
 
@@ -95,7 +101,11 @@ func (in *input) frac(x float64) float64 {
 }
 
 func (in *input) onMouseMove(e core.MouseEvent) {
-	x := in.xAt(float64(e.Position.X))
+	px := float64(e.Position.X)
+	x := in.xAt(px)
+	if in.drag.active && in.drag.view.X.Valid() {
+		x = in.xAtIn(px, in.drag.view.X)
+	}
 	if in.drag.active {
 		switch {
 		case in.drag.sel:
@@ -113,7 +123,11 @@ func (in *input) onMouseMove(e core.MouseEvent) {
 				}
 				in.drag.moved = true
 			}
-			in.setView(in.drag.view.PanX(in.drag.fromX - x))
+			// A pan moves the view by whole pixels: a fraction of one
+			// puts different samples in every column each frame, so the
+			// decimated trace shimmers as it slides. Whole pixels keep
+			// the line still between steps, which reads as a smooth drag.
+			in.setView(in.drag.view.PanX(in.snappedPan(in.drag.fromX - x)))
 		}
 		return
 	}
@@ -163,6 +177,17 @@ func (in *input) cursorEnd(first bool) {
 	} else {
 		in.setCursor(in.c.xAtFrac(1, vx))
 	}
+}
+
+// snappedPan rounds a drag's data distance to whole pixels of the view.
+func (in *input) snappedPan(dx float64) float64 {
+	if w := float64(in.plotSize.Get().Width); w > 0 {
+		if span := in.drag.view.X.Span(); span > 0 {
+			step := span / w
+			return math.Round(dx/step) * step
+		}
+	}
+	return dx
 }
 
 // panView slides the view by a tenth of what it shows, as mygogo's arrow
@@ -219,7 +244,7 @@ func (in *input) onMouseLeave(core.MouseEvent) {
 
 func (in *input) onPressDown(e core.PressEvent) {
 	x := in.xAt(float64(e.Position.X))
-	in.drag = dragState{active: true, zoom: e.Modifiers.Shift, sel: e.Modifiers.Alt, fromX: x, view: in.ownView()}
+	in.drag = dragState{active: true, mouse: true, zoom: e.Modifiers.Shift, sel: e.Modifiers.Alt, fromX: x, view: in.ownView()}
 	if in.c.Measure {
 		if in.drag.sel {
 			in.markA.Set(in.frac(in.snap(x)))
@@ -292,7 +317,19 @@ func (in *input) zoom(f, at float64) Viewport {
 
 // onTouch pans with one finger and pinches with two, as a touch surface
 // does; a mouse pans through OnMouseMove instead.
+//
+// A desktop reports its mouse as a finger too, so components that only
+// know touches work with one. A chart knows both, and while a mouse press
+// is under way those touches are its echo: letting them pan as well would
+// move the view twice, and clearing the drag on their end would leave the
+// chart where the first small step took it.
 func (in *input) onTouch(e core.TouchEvent) {
+	if in.drag.active && in.drag.mouse && in.drag.marker == 0 {
+		if e.Phase == core.TouchEnd || e.Phase == core.TouchCancel {
+			in.touch = touchState{}
+		}
+		return
+	}
 	switch e.Phase {
 	case core.TouchStart:
 		if len(e.Touches) == 0 {
@@ -352,7 +389,14 @@ func (in *input) onTouch(e core.TouchEvent) {
 			return
 		}
 		if len(e.Touches) == 1 {
-			x := in.xAt(float64(e.Touches[0].Position.X))
+			// The finger's x is read in the view the pan started from, as a
+			// mouse drag's is: the moving view must not steer its own
+			// reading, or the waveform shakes in place.
+			px := float64(e.Touches[0].Position.X)
+			x := in.xAt(px)
+			if in.touch.view.X.Valid() {
+				x = in.xAtIn(px, in.touch.view.X)
+			}
 			if in.touch.pinch {
 				// One finger left the pinch: start a fresh pan here.
 				in.touch.pinch = false
@@ -375,9 +419,10 @@ func (in *input) onWheel(e core.WheelEvent) {
 		in.yZoom.Set(min(max(z*(1-float64(e.Delta.Y)/400), 0.05), 20))
 		return
 	}
-	if !e.Modifiers.Control && !e.Modifiers.Platform {
+	if !e.Modifiers.Control && !e.Modifiers.Platform && !in.c.WheelZoom {
 		// A wheel without a modifier goes on to the scroll views around
-		// the chart, as it does in mygogo's plot.
+		// the chart, as it does in mygogo's plot, unless the app asked
+		// for the wheel itself.
 		return
 	}
 	step := float64(e.Delta.Y)

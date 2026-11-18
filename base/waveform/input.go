@@ -30,6 +30,18 @@ type touchState struct {
 	view     Viewport
 }
 
+// viewGestures names what a view change means to a triggered chart. A
+// pan is a temporary look-around that ends with a lock back onto the
+// trigger edge; a zoom records the window width to keep; a fit returns
+// to the chart's defaults. chart.go builds these from its own signals.
+type viewGestures struct {
+	begin func()         // a drag starts: let the view win for now
+	pan   func(Viewport) // a drag moves the view
+	zoom  func(Viewport) // a zoom changes the window width
+	end   func()         // a drag lifts: hand the view back to the trigger
+	fit   func()         // a double click or fit returns to defaults
+}
+
 // input is a Chart's interactive state for one render. It turns the
 // pointer's place in the root view into a data x, and changes the view,
 // the cursor and the markers through signals, so every handler leads to
@@ -46,6 +58,7 @@ type input struct {
 	xView    func() Range
 	setView  func(Viewport)
 	snap     func(float64) float64
+	gestures viewGestures
 	frameOf  func() *frame // the drawn frame, for Value-mode anchor lookup
 	drag     dragState
 	touch    touchState
@@ -54,9 +67,10 @@ type input struct {
 
 func newInput(c Chart, view *core.Signal[Viewport], hover, markA, markB, yZoom *core.Signal[float64],
 	fade *core.AnimatedValue, plotSize *core.Signal[core.Size], xView func() Range, setView func(Viewport),
-	snap func(float64) float64, frameOf func() *frame) *input {
+	snap func(float64) float64, gestures viewGestures, frameOf func() *frame) *input {
 	return &input{c: c, view: view, hover: hover, fade: fade, markA: markA, markB: markB,
-		yZoom: yZoom, plotSize: plotSize, xView: xView, setView: setView, snap: snap, frameOf: frameOf}
+		yZoom: yZoom, plotSize: plotSize, xView: xView, setView: setView, snap: snap,
+		gestures: gestures, frameOf: frameOf}
 }
 
 // ownView is the view this chart shows, fitted and clamped to the data,
@@ -258,7 +272,7 @@ func (in *input) onMouseMove(e core.MouseEvent) {
 			// puts different samples in every column each frame, so the
 			// decimated trace shimmers as it slides. Whole pixels keep
 			// the line still between steps, which reads as a smooth drag.
-			in.setView(in.drag.view.PanX(in.snappedPan(in.drag.fromX - x)))
+			in.gestures.pan(in.drag.view.PanX(in.snappedPan(in.drag.fromX - x)))
 		}
 		return
 	}
@@ -328,7 +342,9 @@ func (in *input) panView(dir int) {
 	if !vx.Valid() {
 		return
 	}
-	in.setView(in.ownView().PanX(float64(dir) * vx.Span() * 0.1))
+	// A key pan is a one-step look-around that ends at once.
+	in.gestures.pan(in.ownView().PanX(float64(dir) * vx.Span() * 0.1))
+	in.gestures.end()
 }
 
 // zoomView scales the view around its middle from the keyboard.
@@ -337,12 +353,12 @@ func (in *input) zoomView(f float64) {
 	if !vx.Valid() {
 		return
 	}
-	in.setView(in.zoom(f, (vx.Lo+vx.Hi)/2))
+	in.gestures.zoom(in.zoom(f, (vx.Lo+vx.Hi)/2))
 }
 
 // fitView resets the view, as a double click does.
 func (in *input) fitView() {
-	in.setView(Viewport{})
+	in.gestures.fit()
 	in.yZoom.Set(1)
 }
 
@@ -377,6 +393,10 @@ func (in *input) onPressDown(e core.PressEvent) {
 	px, py := float64(e.Position.X), float64(e.Position.Y)
 	x := in.xAt(px)
 	in.drag = dragState{active: true, mouse: true, zoom: e.Modifiers.Shift, sel: e.Modifiers.Alt, fromX: x, view: in.ownView()}
+	// Let the view win from the press, so xAt and snap keep the same
+	// basis as the trace while it is being dragged. onPressUp always
+	// hands it back, even for a press that never moved.
+	in.gestures.begin()
 	if in.c.Measure {
 		if in.drag.sel {
 			in.setAnchor(in.markA, py, x)
@@ -398,6 +418,9 @@ func (in *input) onPressUp(e core.PressEvent) {
 	}
 	d := in.drag
 	in.drag = dragState{}
+	// Whatever the press did — a pan, a marker, a selection, or nothing —
+	// the trigger takes the view back once the button lifts.
+	defer in.gestures.end()
 	px, py := float64(e.Position.X), float64(e.Position.Y)
 	x := in.xAt(px)
 	if d.sel {
@@ -420,14 +443,14 @@ func (in *input) onPressUp(e core.PressEvent) {
 	}
 	lo, hi := min(d.fromX, x), max(d.fromX, x)
 	if in.moved(x, d.fromX) {
-		in.setView(Viewport{X: Range{lo, hi}})
+		in.gestures.zoom(Viewport{X: Range{lo, hi}})
 	}
 }
 
 // onPress fits the view on a double click.
 func (in *input) onPress(e core.PressEvent) {
 	if e.Clicks >= 2 {
-		in.setView(Viewport{})
+		in.gestures.fit()
 		in.yZoom.Set(1)
 	}
 }
@@ -483,6 +506,8 @@ func (in *input) onTouch(e core.TouchEvent) {
 			in.touch.pinch = true
 			in.touch.lastDist = math.Abs(float64(e.Touches[0].Position.X - e.Touches[1].Position.X))
 		}
+		// A finger pan is a look-around too; the trigger returns on lift.
+		in.gestures.begin()
 	case core.TouchMove:
 		if in.drag.active && in.drag.marker != 0 && len(e.Touches) == 1 {
 			t := e.Touches[0].Position
@@ -507,7 +532,7 @@ func (in *input) onTouch(e core.TouchEvent) {
 			}
 			at := in.xAt(float64(e.Touches[0].Position.X+e.Touches[1].Position.X) / 2)
 			if in.touch.lastDist > 0 && dist > 0 {
-				in.setView(in.zoom(in.touch.lastDist/dist, at))
+				in.gestures.zoom(in.zoom(in.touch.lastDist/dist, at))
 			}
 			in.touch.lastDist = dist
 			return
@@ -528,12 +553,13 @@ func (in *input) onTouch(e core.TouchEvent) {
 				in.touch.lastX = x
 				return
 			}
-			in.setView(in.touch.view.PanX(in.touch.lastX - x))
+			in.gestures.pan(in.touch.view.PanX(in.touch.lastX - x))
 		}
 	case core.TouchEnd, core.TouchCancel:
 		in.touch = touchState{}
 		in.drag = dragState{}
 		in.pinched = false
+		in.gestures.end()
 	}
 }
 
@@ -554,7 +580,7 @@ func (in *input) onWheel(e core.WheelEvent) {
 		step /= 4
 	}
 	at := in.xAt(float64(e.Position.X))
-	in.setView(in.zoom(math.Pow(1.25, step/100), at))
+	in.gestures.zoom(in.zoom(math.Pow(1.25, step/100), at))
 }
 
 func (in *input) onPinch(e core.GestureEvent) {
@@ -563,7 +589,7 @@ func (in *input) onPinch(e core.GestureEvent) {
 	}
 	in.pinched = true
 	at := in.xAt(float64(e.Position.X))
-	in.setView(in.zoom(1/float64(e.Value), at))
+	in.gestures.zoom(in.zoom(1/float64(e.Value), at))
 }
 
 // onAccessibilityAction steps the cursor through the visible range, as a

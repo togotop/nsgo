@@ -382,6 +382,15 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 	}
 	yZoom := core.NewSignal(cx, float64(1))
 	focused := core.NewSignal(cx, false)
+	// userSpan is the window width a zoom left behind, kept apart from the
+	// view so a trigger can lock the view's position without losing it.
+	// Zero means no zoom: the trigger uses the chart's base window.
+	userSpan := core.NewSignal(cx, float64(0))
+	// panning is true while a drag is showing a stretch of the trace. A
+	// triggered chart lets the drag inspect it, then locks back onto the
+	// edge when it lifts. These are signals because xView runs inside the
+	// decimated memo, which only re-runs for the signals it reads.
+	panning := core.NewSignal(cx, false)
 
 	var heldX Range
 	// viewAnchor is how far the right end of a view the user zoomed or
@@ -402,6 +411,39 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 		if c.Trigger != nil && c.Trigger.Mode == TriggerSingle {
 			if f := frozenView.GetUntracked(); f.Valid() {
 				return f
+			}
+		}
+		// A running, triggered chart locks onto its edge ahead of any view
+		// a pan or zoom left behind, so neither gesture takes the trigger
+		// away. The drag (panning) is the one time the view wins: it shows
+		// a stretch of the trace until the finger or button lifts. A
+		// stopped chart keeps the chain below, so its capture stays free
+		// to zoom and pan. userSpan keeps a zoom's width across the lock.
+		running := c.Run == nil || c.Run.Running()
+		if c.Trigger != nil && c.Trigger.Mode != TriggerSingle && running &&
+			!panning.Get() && e.Valid() {
+			width := userSpan.Get()
+			if width <= 0 {
+				width = c.baseWindow()
+			}
+			if width <= 0 && v.X.Valid() {
+				width = v.X.Span()
+			}
+			if width > 0 {
+				pos := c.Trigger.Position
+				if pos <= 0 {
+					pos = 0.5
+				}
+				pos = min(max(pos, 0), 1)
+				margin := (1 - pos) * width
+				if tx, ok := c.triggerAtBefore(states, width, e.Hi-margin); ok {
+					r := Viewport{X: Range{tx - pos*width, tx + (1-pos)*width}}.Clamp(e).X
+					heldX, triggerX, haveTrigger = r, tx, true
+					return r
+				}
+				if heldX.Valid() {
+					return heldX
+				}
 			}
 		}
 		if anchored && v.X.Valid() && e.Valid() {
@@ -484,6 +526,36 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 			c.OnViewChange(v)
 		}
 	}
+	// gestures names what a view change means, so a triggered chart can
+	// keep its edge through them: a pan is a temporary look-around, a
+	// zoom sets the window width to keep, and a fit returns to defaults.
+	gestures := viewGestures{
+		begin: func() { panning.Set(true) },
+		pan: func(v Viewport) {
+			panning.Set(true)
+			setView(v)
+		},
+		zoom: func(v Viewport) {
+			if v.X.Valid() {
+				userSpan.Set(v.X.Span())
+			}
+			// While a trigger holds the view, a zoom only changes the
+			// window width: writing the view would anchor it and take the
+			// trigger away. Without a trigger (or while stopped, or mid
+			// drag) the view still has to be written, as before.
+			triggerHolds := c.Trigger != nil && c.Trigger.Mode != TriggerSingle &&
+				(c.Run == nil || c.Run.Running()) && !panning.Get()
+			if !triggerHolds {
+				setView(v)
+			}
+		},
+		end: func() { panning.Set(false) },
+		fit: func() {
+			userSpan.Set(0)
+			panning.Set(false)
+			setView(Viewport{})
+		},
+	}
 	if c.Sync != nil && c.OnViewChange != nil {
 		cx.Effect(func() { c.OnViewChange(c.Sync.viewOf(view.Get())) })
 	}
@@ -492,7 +564,7 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 	}
 	var frameOf func() *frame
 	in := newInput(c, view, hover, markA, markB, yZoom, fade, plotSize, xView, setView, snap,
-		func() *frame { return frameOf() })
+		gestures, func() *frame { return frameOf() })
 
 	// Single arms one capture: it waits for an edge that arrives after
 	// the press, then stops, leaving that capture on screen. An edge

@@ -531,6 +531,12 @@ const (
 	textDemoWaveformRun
 	textDemoWaveformStop
 	textDemoWaveformSingle
+	textDemoWaveformMarkTime
+	textDemoWaveformMarkValue
+	textDemoWaveformTrigger
+	textDemoWaveformTriggerLevel
+	textDemoWaveformRearm
+	textDemoWaveformZoomHint
 	textDemoProgress
 	textDemoProgressDetail
 	textDemoResizable
@@ -2858,6 +2864,12 @@ var keyOfText = [numTexts]string{
 	"demoWaveformRun",
 	"demoWaveformStop",
 	"demoWaveformSingle",
+	"demoWaveformMarkTime",
+	"demoWaveformMarkValue",
+	"demoWaveformTrigger",
+	"demoWaveformTriggerLevel",
+	"demoWaveformRearm",
+	"demoWaveformZoomHint",
 	"demoProgress",
 	"demoProgressDetail",
 	"demoResizable",
@@ -5183,6 +5195,12 @@ var textsEn = i18n.NewTexts(""+
 	"Run"+
 	"Stop"+
 	"Single"+
+	"Δt · time"+
+	"Δ= · value"+
+	"Trigger"+
+	"Level"+
+	"Re-arm"+
+	"Ctrl + scroll to zoom"+
 	"Progress"+
 	"Bars, rings, spinners, meters and skeletons"+
 	"Resizable"+
@@ -7505,6 +7523,12 @@ var textsEn = i18n.NewTexts(""+
 		3,
 		4,
 		6,
+		11,
+		12,
+		7,
+		5,
+		6,
+		21,
 		8,
 		43,
 		9,
@@ -9830,6 +9854,12 @@ var textsZhHans = i18n.NewTexts(""+
 	"运行"+
 	"停止"+
 	"单次"+
+	"Δt · 时间"+
+	"Δ= · 数值"+
+	"触发"+
+	"触发水平"+
+	"重新触发"+
+	"Ctrl + 滚轮缩放"+
 	"进度"+
 	"进度条、进度环、加载指示器、仪表与骨架屏"+
 	"可调整大小"+
@@ -12152,6 +12182,12 @@ var textsZhHans = i18n.NewTexts(""+
 		6,
 		6,
 		6,
+		13,
+		13,
+		6,
+		12,
+		12,
+		19,
 		6,
 		60,
 		15,
@@ -15693,6 +15729,50 @@ func DemoWaveformSingle(cx *core.Scope) string { return For(cx).DemoWaveformSing
 
 // DemoWaveformSingle is the package's DemoWaveformSingle in the language of msgs.
 func (msgs Messages) DemoWaveformSingle() string { return msgs.text(textDemoWaveformSingle) }
+
+// DemoWaveformMarkTime says "Δt · time"
+// in the language the app shows under cx.
+func DemoWaveformMarkTime(cx *core.Scope) string { return For(cx).DemoWaveformMarkTime() }
+
+// DemoWaveformMarkTime is the package's DemoWaveformMarkTime in the language of msgs.
+func (msgs Messages) DemoWaveformMarkTime() string { return msgs.text(textDemoWaveformMarkTime) }
+
+// DemoWaveformMarkValue says "Δ= · value"
+// in the language the app shows under cx.
+func DemoWaveformMarkValue(cx *core.Scope) string { return For(cx).DemoWaveformMarkValue() }
+
+// DemoWaveformMarkValue is the package's DemoWaveformMarkValue in the language of msgs.
+func (msgs Messages) DemoWaveformMarkValue() string { return msgs.text(textDemoWaveformMarkValue) }
+
+// DemoWaveformTrigger says "Trigger"
+// in the language the app shows under cx.
+func DemoWaveformTrigger(cx *core.Scope) string { return For(cx).DemoWaveformTrigger() }
+
+// DemoWaveformTrigger is the package's DemoWaveformTrigger in the language of msgs.
+func (msgs Messages) DemoWaveformTrigger() string { return msgs.text(textDemoWaveformTrigger) }
+
+// DemoWaveformTriggerLevel says "Level"
+// in the language the app shows under cx.
+func DemoWaveformTriggerLevel(cx *core.Scope) string { return For(cx).DemoWaveformTriggerLevel() }
+
+// DemoWaveformTriggerLevel is the package's DemoWaveformTriggerLevel in the language of msgs.
+func (msgs Messages) DemoWaveformTriggerLevel() string {
+	return msgs.text(textDemoWaveformTriggerLevel)
+}
+
+// DemoWaveformRearm says "Re-arm"
+// in the language the app shows under cx.
+func DemoWaveformRearm(cx *core.Scope) string { return For(cx).DemoWaveformRearm() }
+
+// DemoWaveformRearm is the package's DemoWaveformRearm in the language of msgs.
+func (msgs Messages) DemoWaveformRearm() string { return msgs.text(textDemoWaveformRearm) }
+
+// DemoWaveformZoomHint says "Ctrl + scroll to zoom"
+// in the language the app shows under cx.
+func DemoWaveformZoomHint(cx *core.Scope) string { return For(cx).DemoWaveformZoomHint() }
+
+// DemoWaveformZoomHint is the package's DemoWaveformZoomHint in the language of msgs.
+func (msgs Messages) DemoWaveformZoomHint() string { return msgs.text(textDemoWaveformZoomHint) }
 
 // DemoProgress says "Progress"
 // in the language the app shows under cx.

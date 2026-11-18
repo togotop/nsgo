@@ -124,6 +124,17 @@ func waveformDemo(cx *core.Scope) core.Node {
 	})
 
 	run := &base.Run{}
+	// Run.Running reads untracked, so keep a tracked copy for the toggle's
+	// look. A press flips both it and the chart's acquisition.
+	running := core.NewSignal(cx, true)
+	toggleRun := func() {
+		if running.Get() {
+			run.Stop()
+		} else {
+			run.Start()
+		}
+		running.Set(!running.Get())
+	}
 	series := make([]base.Series, len(sources))
 	for i, src := range sources {
 		series[i] = base.Series{Source: src, Name: []string{"CH1", "CH2"}[i]}
@@ -164,12 +175,19 @@ func waveformDemo(cx *core.Scope) core.Node {
 	runControls := core.View{
 		Style: core.Style{Direction: core.Row, Gap: 8, AlignItems: core.AlignCenter, Wrap: core.Wrap},
 		Children: []core.Node{
-			ui.Button{Text: tr.DemoWaveformRun(), Icon: lucide.Play,
-				Variant: ui.ButtonSecondary, Size: ui.SizeSmall, OnPress: run.Start},
-			ui.Button{Text: tr.DemoWaveformStop(), Icon: lucide.Pause,
-				Variant: ui.ButtonSecondary, Size: ui.SizeSmall, OnPress: run.Stop},
+			core.Dynamic(func(*core.Scope) core.Node {
+				if running.Get() {
+					return ui.Button{Text: tr.DemoWaveformStop(), Icon: lucide.Pause, TestID: "wave-run",
+						Variant: ui.ButtonSecondary, Size: ui.SizeSmall, OnPress: toggleRun}
+				}
+				return ui.Button{Text: tr.DemoWaveformRun(), Icon: lucide.Play, TestID: "wave-run",
+					Variant: ui.ButtonSecondary, Size: ui.SizeSmall, OnPress: toggleRun}
+			}),
 			ui.Button{Text: tr.DemoWaveformSingle(), Icon: lucide.CircleDot, TestID: "wave-single",
-				Variant: ui.ButtonSecondary, Size: ui.SizeSmall, OnPress: run.Single},
+				Variant: ui.ButtonSecondary, Size: ui.SizeSmall, OnPress: func() {
+					running.Set(true) // Single starts acquisition; it stops at the next edge.
+					run.Single()
+				}},
 			ui.Button{Text: tr.DemoWaveformRearm(), Icon: lucide.RotateCcw,
 				Variant: ui.ButtonSecondary, Size: ui.SizeSmall,
 				OnPress: func() {

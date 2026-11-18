@@ -43,17 +43,40 @@ type Waveform struct {
 
 // Render implements core.Node. The look is type and a fixed chart palette:
 // a chart's series keep their colors in every theme, and the grid, cross
-// line and markers are faint enough for both. Text takes the inherited
-// color, so a switch of appearance restyles it in place without recording
-// the waveform or rebuilding a view.
+// line and markers are faint enough for both. The canvas colors stay fixed,
+// so a switch of appearance never records the waveform again. The text
+// around it — axes, legend and readings — takes fixed-width figures and
+// theme classes: it restyles in place, without rebuilding a view or a
+// canvas, which is what keeps a chart cheap to redraw every frame.
 func (w Waveform) Render(*core.Scope) core.Node {
 	c := w.Chart
 	if c.GridColor == 0 {
 		c.GridColor = w.Variant.grid()
 	}
-	c.AxisStyle = core.Style{FontSize: 11}.Merge(c.AxisStyle)
-	c.LegendStyle = core.Style{FontSize: 11}.Merge(c.LegendStyle)
-	c.MeasurementStyle = core.Style{FontSize: 11}.Merge(c.MeasurementStyle)
+	// Fixed-width figures keep a changing tick, value or reading from
+	// shifting the text beside it. These are text fields inherited by the
+	// view's children, so setting them on the parent styles the numbers.
+	typeStyle := core.Style{FontSize: 11, FontVariant: core.FontTabularNums}
+	c.AxisStyle = typeStyle.Merge(c.AxisStyle)
+	c.LegendStyle = typeStyle.Merge(c.LegendStyle)
+	c.MeasurementStyle = core.Style{FontSize: 11, FontVariant: core.FontTabularNums,
+		BorderCurve: core.BorderCurveContinuous}.Merge(c.MeasurementStyle)
+	// Theme classes on the text views resolve on the view's own scope: a
+	// change of appearance restyles just that view, never the canvases
+	// below, so they keep their fixed colors. An app's own class wins.
+	if c.AxisClass == "" {
+		c.AxisClass = "text-muted-foreground"
+	}
+	if c.LegendClass == "" {
+		c.LegendClass = "gap-3"
+	}
+	if c.MeasurementClass == "" {
+		// A plain translucent surface, no backdrop-filter: the readings
+		// sit over a trace that redraws every frame, and a backdrop blur
+		// would make the browser re-blur that area on every frame. The
+		// border and shadow give the chip its shape on their own.
+		c.MeasurementClass = "bg-primary/10 rounded-(--radius) border border-border shadow-card"
+	}
 	if c.TriggerColor == 0 {
 		// A fixed chart color, as the grid's is: the trigger line is a
 		// recorded drawing operation, not part of the theme's look.

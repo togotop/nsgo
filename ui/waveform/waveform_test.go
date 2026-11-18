@@ -100,7 +100,14 @@ func TestStyledLayoutKeepsCanvasesFixed(t *testing.T) {
 		t.Fatalf("the text around the chart is not tabular: axis=%v legend=%v measure=%v",
 			c.AxisStyle.FontVariant, c.LegendStyle.FontVariant, c.MeasurementStyle.FontVariant)
 	}
-	if c.AxisClass != "text-muted-foreground" || c.LegendClass != "gap-3" || c.MeasurementClass == "" {
+	// A plot's figures are fixed-pitch; the waveform follows the same
+	// language so the two read as one set of components.
+	if c.AxisStyle.FontFamily != core.FontMonospace || c.LegendStyle.FontFamily != core.FontMonospace ||
+		c.MeasurementStyle.FontFamily != core.FontMonospace {
+		t.Fatalf("the chart's figures are not fixed-pitch: axis=%v legend=%v measure=%v",
+			c.AxisStyle.FontFamily, c.LegendStyle.FontFamily, c.MeasurementStyle.FontFamily)
+	}
+	if c.AxisClass != "text-(--faint)" || c.LegendClass != "gap-3" || c.MeasurementClass == "" {
 		t.Fatalf("the text views did not get their theme classes: axis=%q legend=%q measure=%q",
 			c.AxisClass, c.LegendClass, c.MeasurementClass)
 	}

@@ -53,19 +53,25 @@ func (w Waveform) Render(*core.Scope) core.Node {
 	if c.GridColor == 0 {
 		c.GridColor = w.Variant.grid()
 	}
-	// Fixed-width figures keep a changing tick, value or reading from
-	// shifting the text beside it. These are text fields inherited by the
-	// view's children, so setting them on the parent styles the numbers.
-	typeStyle := core.Style{FontSize: 11, FontVariant: core.FontTabularNums}
-	c.AxisStyle = typeStyle.Merge(c.AxisStyle)
+	// The type around the chart follows the same language as a plot's:
+	// a fixed-pitch face and fixed-width figures, so a changing tick,
+	// value or reading neither shifts its neighbour nor changes width.
+	// These are text fields inherited by the view's children, so setting
+	// them on the parent styles the numbers below.
+	typeStyle := core.Style{FontSize: 11, FontFamily: core.FontMonospace, FontVariant: core.FontTabularNums}
+	c.AxisStyle = core.Style{FontSize: 10.5, FontFamily: core.FontMonospace,
+		FontVariant: core.FontTabularNums}.Merge(c.AxisStyle)
 	c.LegendStyle = typeStyle.Merge(c.LegendStyle)
-	c.MeasurementStyle = core.Style{FontSize: 11, FontVariant: core.FontTabularNums,
+	c.MeasurementStyle = core.Style{FontSize: 11, FontFamily: core.FontMonospace,
+		FontVariant: core.FontTabularNums,
 		BorderCurve: core.BorderCurveContinuous}.Merge(c.MeasurementStyle)
 	// Theme classes on the text views resolve on the view's own scope: a
 	// change of appearance restyles just that view, never the canvases
 	// below, so they keep their fixed colors. An app's own class wins.
+	// Axis figures take the same faint ink as a plot's: they are the
+	// scale, not the data.
 	if c.AxisClass == "" {
-		c.AxisClass = "text-muted-foreground"
+		c.AxisClass = "text-(--faint)"
 	}
 	if c.LegendClass == "" {
 		c.LegendClass = "gap-3"

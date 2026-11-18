@@ -283,8 +283,13 @@ func waveformDemo(cx *core.Scope) core.Node {
 					DivisionsX: 10,
 					DivisionsY: 8,
 					// Start from the view the user kept, so changing the
-					// trigger does not undo a zoom or pan.
-					View:         savedView.Get(),
+					// trigger does not undo a zoom or pan. Read it untracked:
+					// a pan writes it on every move through OnViewChange, and
+					// tracking it here would rebuild the chart on each of
+					// those writes, dropping the drag mid-gesture and making
+					// the trace jump. Untracked still sees the latest view
+					// when another signal (Re-arm, the trigger) rebuilds us.
+					View:         savedView.GetUntracked(),
 					OnViewChange: savedView.Set,
 					Axes: []base.Axis{
 						{Title: "CH1", Format: func(v float64) string { return si(v, "V") }},

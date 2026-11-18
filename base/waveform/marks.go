@@ -20,6 +20,47 @@ type parts struct {
 	plotSize     *core.Signal[core.Size]
 }
 
+// markSource returns the channel Value-mode anchors read from, and the
+// frame whose y ranges turn its values into screen positions. A missing
+// frame or channel yields nil and the caller keeps the markers at rest.
+func (p parts) markSource() (*seriesState, *frame) {
+	f := p.f.Get()
+	if f == nil || len(p.states) == 0 {
+		return nil, nil
+	}
+	i := p.c.MarkChannel
+	if i < 0 || i >= len(p.states) {
+		i = 0
+	}
+	return p.states[i], f
+}
+
+// markValue is the selected channel's value at an anchor's screen-x
+// fraction, the waveform point a vertical line crosses.
+func (p parts) markValue(xFrac float64) (float64, bool) {
+	st, f := p.markSource()
+	if st == nil || f == nil || st.d == nil {
+		return 0, false
+	}
+	v, ok := st.d.valueAt(p.c.xAtFrac(xFrac, f.vx))
+	return float64(v), ok
+}
+
+// markYFrac turns an anchor's value into a fraction down the plot from the
+// top, the screen position of the horizontal line through that waveform
+// point. It falls back to the fraction itself when there is no range.
+func (p parts) markYFrac(xFrac float64) float64 {
+	st, f := p.markSource()
+	if st == nil || f == nil || st.axis < 0 || st.axis >= len(f.ranges) {
+		return xFrac
+	}
+	v, ok := p.markValue(xFrac)
+	if !ok {
+		return xFrac
+	}
+	return yFrac(v, f.ranges[st.axis], f.logs[st.axis])
+}
+
 // cursorX is the data x under this chart's pointer, or the group's cursor
 // when another chart of the group owns it.
 func (p parts) cursorX() float64 {
@@ -127,28 +168,54 @@ func (p parts) legend() core.Node {
 	}
 }
 
+// markers draws the two A/B anchors. In Time mode they are vertical lines
+// at the anchors' x; in Value mode they are horizontal lines through each
+// anchor's value on the selected channel. Both modes share the same anchors,
+// so switching orientation keeps the markers on the same waveform points.
 func (p parts) markers() []core.Node {
-	out := make([]core.Node, 0, 3)
+	if p.c.MarkReading == MarkReadingNone {
+		return nil
+	}
+	valueMode := p.c.MarkReading == MarkReadingValue
+	out := make([]core.Node, 0, 4)
 	for i, mark := range []*core.Signal[float64]{p.markA, p.markB} {
 		m := mark
 		id := ""
 		if p.c.TestID != "" {
 			id = p.c.TestID + []string{"-mark-a", "-mark-b"}[i]
 		}
-		out = append(out, core.View{
-			TestID: id,
-			Class:  p.c.MarkClass,
-			Style: core.Style{Position: core.Absolute, Top: core.Pt(0), Bottom: core.Pt(0),
-				Width: core.Pt(1)}.Merge(p.c.MarkStyle),
-			StyleFunc: func() core.Style {
-				return core.Style{Left: core.Pct(float32(m.Get() * 100))}
-			},
-		})
+		if valueMode {
+			// A horizontal line spans the plot at the anchor's value height.
+			out = append(out, core.View{
+				TestID: id,
+				Class:  p.c.MarkClass,
+				Style: core.Style{Position: core.Absolute, Left: core.Pt(0), Right: core.Pt(0),
+					Height: core.Pt(1)}.Merge(p.c.MarkStyle),
+				StyleFunc: func() core.Style {
+					return core.Style{Top: core.Pct(float32(p.markYFrac(m.Get()) * 100))}
+				},
+			})
+		} else {
+			out = append(out, core.View{
+				TestID: id,
+				Class:  p.c.MarkClass,
+				Style: core.Style{Position: core.Absolute, Top: core.Pt(0), Bottom: core.Pt(0),
+					Width: core.Pt(1)}.Merge(p.c.MarkStyle),
+				StyleFunc: func() core.Style {
+					return core.Style{Left: core.Pct(float32(m.Get() * 100))}
+				},
+			})
+		}
 		if label := p.c.MarkLabels[i]; label != "" {
 			out = append(out, core.Text{
 				Content: label,
 				Class:   p.c.MarkClass,
 				StyleFunc: func() core.Style {
+					if valueMode {
+						return core.Style{Position: core.Absolute, Left: core.Pt(2),
+							Top: core.Pct(float32(p.markYFrac(m.Get()) * 100)),
+							Margin: core.Edges{Top: -12}}
+					}
 					return core.Style{Position: core.Absolute,
 						Left: core.Pct(float32(m.Get() * 100)), Top: core.Pt(2),
 						Margin: core.Edges{Left: 3}}
@@ -156,43 +223,6 @@ func (p parts) markers() []core.Node {
 			})
 		}
 	}
-	out = append(out, core.Text{
-		Class: p.c.MarkClass,
-		Style: core.Style{Position: core.Absolute, Left: core.Pt(0), Bottom: core.Pt(2)},
-		ContentFunc: func() string {
-			fa, fb := p.markA.Get(), p.markB.Get()
-			if math.IsNaN(fa) || math.IsNaN(fb) {
-				return ""
-			}
-			f := p.f.Get()
-			if f == nil {
-				return ""
-			}
-			// The markers are screen fractions; turn them back into data x
-			// in the view's own scale, so their readings agree with the
-			// interval the automatic measurements use.
-			a := p.c.xAtFrac(fa, f.vx)
-			b := p.c.xAtFrac(fb, f.vx)
-			dx := math.Abs(b - a)
-			var reading string
-			if f := p.c.axisAt(0).Format; f != nil {
-				reading = f(dx)
-			} else {
-				reading = strconv.FormatFloat(dx, 'g', 4, 64)
-			}
-			for _, st := range p.states {
-				if st.cfg.Hidden || st.d == nil {
-					continue
-				}
-				va, oka := st.d.valueAt(a)
-				vb, okb := st.d.valueAt(b)
-				if oka && okb {
-					reading += "  " + formatValue(float64(vb-va), p.c.axisAt(st.axis).Format)
-				}
-			}
-			return reading
-		},
-	})
 	return out
 }
 
@@ -226,6 +256,30 @@ func (p parts) readingText(m Measurement) string {
 	f := p.f.Get()
 	if f == nil {
 		return ""
+	}
+	if m.Kind == MeasureMarkDelta {
+		// The value difference between the two anchors on the selected
+		// channel. Over is deliberately MeasureView so the x-interval path
+		// below is never taken; read the anchors directly instead.
+		fa, fb := p.markA.Get(), p.markB.Get()
+		if math.IsNaN(fa) || math.IsNaN(fb) {
+			return ""
+		}
+		va, oka := p.markValue(fa)
+		vb, okb := p.markValue(fb)
+		if !oka || !okb {
+			return ""
+		}
+		st, _ := p.markSource()
+		var format func(float64) string
+		if st != nil {
+			format = p.c.axisAt(st.axis).Format
+		}
+		value := formatValue(math.Abs(vb-va), format)
+		if m.Label == "" {
+			return value
+		}
+		return m.Label + " " + value
 	}
 	vx := f.vx
 	if m.Over == MeasureMarkers {

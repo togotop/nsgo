@@ -95,8 +95,19 @@ type Chart struct {
 	MarkStyle      core.Style
 	// MarkLabels names the two markers, as "A" and "B". Empty shows none;
 	// the component holds no words of its own.
-	MarkLabels    [2]string
-	TriggerColor  core.Color
+	MarkLabels [2]string
+	// MarkReading selects how the A/B markers orient and read. The zero
+	// value draws vertical lines reading the time span.
+	MarkReading MarkReading
+	// MarkA and MarkB are the two anchors, held as the screen x fraction so
+	// the same points draw vertical lines (Time) or horizontal lines through
+	// the channel's value (Value). When nil the chart owns fresh signals;
+	// an app may inject its own to keep the anchors across rebuilds.
+	MarkA, MarkB *core.Signal[float64]
+	// MarkChannel is the series the Value mode reads its anchors' values
+	// from; zero picks the first series.
+	MarkChannel  int
+	TriggerColor core.Color
 	Tooltip       core.Node
 	TooltipOffset core.Points
 
@@ -301,6 +312,38 @@ func yOf(v float32, r Range, h float32, log bool) float32 {
 	return h - float32((float64(v)-r.Lo)/r.Span())*h
 }
 
+// yFrac maps a value to its fraction down the plot from the top: 0 is the
+// axis' Hi, 1 its Lo, matching yOf's pixel position divided by height. It
+// is how a channel's value becomes a horizontal marker's screen position.
+func yFrac(v float64, r Range, log bool) float64 {
+	if log {
+		x := v
+		if x <= 0 {
+			x = r.Lo
+		}
+		den := math.Log10(r.Hi) - math.Log10(r.Lo)
+		if den <= 0 {
+			return 1
+		}
+		return min(max((math.Log10(r.Hi)-math.Log10(x))/den, 0), 1)
+	}
+	if r.Span() <= 0 {
+		return 1
+	}
+	return min(max((r.Hi-v)/r.Span(), 0), 1)
+}
+
+// yAtFrac maps a fraction down the plot from the top back to a value —
+// the inverse of yFrac. Value-mode dragging turns the drop height into a
+// target value with this.
+func yAtFrac(f float64, r Range, log bool) float64 {
+	if log {
+		lo, hi := math.Log10(max(r.Lo, 1e-12)), math.Log10(max(r.Hi, 1e-12))
+		return math.Pow(10, hi-(hi-lo)*f)
+	}
+	return r.Hi - f*r.Span()
+}
+
 // gridPaint is the color of the grid: the app's stroke, else a faint line.
 func (c Chart) gridPaint() core.Color {
 	if c.GridColor != 0 {
@@ -330,8 +373,13 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 	view := core.NewSignal(cx, c.View)
 	hover := core.NewSignal(cx, math.NaN())
 	fade := core.NewAnimatedValue(cx, 0)
-	markA := core.NewSignal(cx, math.NaN())
-	markB := core.NewSignal(cx, math.NaN())
+	markA, markB := c.MarkA, c.MarkB
+	if markA == nil {
+		markA = core.NewSignal(cx, math.NaN())
+	}
+	if markB == nil {
+		markB = core.NewSignal(cx, math.NaN())
+	}
 	yZoom := core.NewSignal(cx, float64(1))
 	focused := core.NewSignal(cx, false)
 
@@ -442,7 +490,9 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 	snap := func(x float64) float64 {
 		return c.snapX(x, states, xView(), int(plotSize.Get().Width))
 	}
-	in := newInput(c, view, hover, markA, markB, yZoom, fade, plotSize, xView, setView, snap)
+	var frameOf func() *frame
+	in := newInput(c, view, hover, markA, markB, yZoom, fade, plotSize, xView, setView, snap,
+		func() *frame { return frameOf() })
 
 	// Single arms one capture: it waits for an edge that arrives after
 	// the press, then stops, leaving that capture on screen. An edge
@@ -596,6 +646,7 @@ func (c Chart) Render(cx *core.Scope) core.Node {
 		}
 		return f
 	})
+	frameOf = decimated.Get
 
 	// The plot's layers, bottom to top: one canvas for the grid and the
 	// bands, one per series, and one for the notes. A series' canvas takes

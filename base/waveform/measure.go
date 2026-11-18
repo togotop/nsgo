@@ -30,6 +30,10 @@ const (
 	// rate that time implies.
 	MeasureSpan
 	MeasureRate
+	// MeasureMarkDelta is the value difference between the two A/B
+	// anchors on the selected channel. It is read specially by readingText
+	// and is not computed by measureFrom.
+	MeasureMarkDelta
 )
 
 // MeasureOver says which interval a reading covers.
@@ -42,6 +46,28 @@ const (
 	// dragged out stretch of the waveform is measured, not the window.
 	MeasureMarkers
 )
+
+// MarkReading selects how the A/B markers orient and what they read. The
+// markers are anchored to two points on the waveform; only their drawing
+// and reading change with the mode. The zero value keeps the historical
+// behaviour: vertical lines reading the time span (Δt) on the x axis.
+type MarkReading uint8
+
+const (
+	// MarkReadingTime draws vertical lines at the two anchor x positions
+	// and reads the time span between them. It is the zero value.
+	MarkReadingTime MarkReading = iota
+	// MarkReadingValue draws horizontal lines through each anchor's value
+	// on the selected channel and reads the value difference (Δ=).
+	MarkReadingValue
+	// MarkReadingNone hides the markers, their labels and the A/B reading;
+	// automatic measurements over the view still show.
+	MarkReadingNone
+)
+
+// MarkReadingBoth is kept as a source-compatible alias: a workspace saved
+// when the chip showed both readings now reads the time span, the zero value.
+const MarkReadingBoth = MarkReadingTime
 
 // Measurement shows one automatic reading of a series. Label is the app's
 // word for it and Format its value; the component holds neither.

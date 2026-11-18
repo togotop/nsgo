@@ -46,6 +46,7 @@ type input struct {
 	xView    func() Range
 	setView  func(Viewport)
 	snap     func(float64) float64
+	frameOf  func() *frame // the drawn frame, for Value-mode anchor lookup
 	drag     dragState
 	touch    touchState
 	pinched  bool
@@ -53,9 +54,9 @@ type input struct {
 
 func newInput(c Chart, view *core.Signal[Viewport], hover, markA, markB, yZoom *core.Signal[float64],
 	fade *core.AnimatedValue, plotSize *core.Signal[core.Size], xView func() Range, setView func(Viewport),
-	snap func(float64) float64) *input {
+	snap func(float64) float64, frameOf func() *frame) *input {
 	return &input{c: c, view: view, hover: hover, fade: fade, markA: markA, markB: markB,
-		yZoom: yZoom, plotSize: plotSize, xView: xView, setView: setView, snap: snap}
+		yZoom: yZoom, plotSize: plotSize, xView: xView, setView: setView, snap: snap, frameOf: frameOf}
 }
 
 // ownView is the view this chart shows, fitted and clamped to the data,
@@ -100,8 +101,138 @@ func (in *input) frac(x float64) float64 {
 	return min(max(in.c.xFrac(x, vx), 0), 1)
 }
 
+// yFracAt turns a pointer's y in the root view into a fraction down the
+// plot (0 = top). The canvas starts below topRoom, like x starts at
+// axisRoom. It is the register a horizontal marker is dragged in.
+func (in *input) yFracAt(py float64) float64 {
+	h := float64(in.plotSize.Get().Height)
+	if h <= 0 {
+		return 0
+	}
+	return min(max((py-float64(topRoom))/h, 0), 1)
+}
+
+// anchorAtValue finds the x fraction on the selected channel whose value
+// is closest to v, searching the frame the line actually draws and
+// preferring the crossing nearest nearX. It returns false when the series
+// has no samples in view, the "no定位点" case that keeps the old anchor.
+func (in *input) anchorAtValue(v float64, nearX float64) (float64, bool) {
+	if in.frameOf == nil {
+		return 0, false
+	}
+	f := in.frameOf()
+	if f == nil {
+		return 0, false
+	}
+	i := in.c.MarkChannel
+	if i < 0 || i >= len(f.series) {
+		i = 0
+	}
+	fs := f.series[i]
+	if len(fs.pts) < 2 {
+		return 0, false
+	}
+	best, bestErr, found := 0.0, math.Inf(1), false
+	for k := 0; k+1 < len(fs.pts); k += 2 {
+		col, sample := float64(fs.pts[k]), float64(fs.pts[k+1])
+		if col < 0 || col > float64(f.px) || sample != sample {
+			continue
+		}
+		value := float64(fs.y(float32(sample)))
+		err := math.Abs(value - v)
+		if err < bestErr {
+			bestErr, best, found = err, col/float64(f.px), true
+		}
+	}
+	return best, found
+}
+
+// setAnchor writes a dragged position to a marker: x for vertical lines,
+// or a value-derived x for horizontal ones.
+func (in *input) setAnchor(mark *core.Signal[float64], py, x float64) {
+	if in.c.MarkReading == MarkReadingValue {
+		f := in.frameOf()
+		if f == nil {
+			return
+		}
+		i := in.c.MarkChannel
+		if i < 0 || i >= len(f.ranges) {
+			i = 0
+		}
+		v := yAtFrac(in.yFracAt(py), f.ranges[i], f.logs[i])
+		if xf, ok := in.anchorAtValue(v, mark.Get()); ok {
+			mark.Set(xf)
+		}
+		return
+	}
+	mark.Set(in.frac(in.snap(x)))
+}
+
+// markPos is a marker's screen position along the active axis: its x
+// fraction in Time mode, or the value-height of its anchor in Value mode.
+// Hit testing compares the pointer against this.
+func (in *input) markPos(mark *core.Signal[float64]) float64 {
+	if in.c.MarkReading != MarkReadingValue {
+		return mark.Get()
+	}
+	f := in.frameOf()
+	if f == nil {
+		return mark.Get()
+	}
+	i := in.c.MarkChannel
+	if i < 0 || i >= len(f.series) {
+		i = 0
+	}
+	fs := f.series[i]
+	if len(fs.pts) < 2 {
+		return mark.Get()
+	}
+	x := in.c.xAtFrac(mark.Get(), f.vx)
+	// The value on the drawn sample column nearest this anchor x.
+	value, nearest, found := 0.0, math.Inf(1), false
+	for k := 0; k+1 < len(fs.pts); k += 2 {
+		col, sample := float64(fs.pts[k]), float64(fs.pts[k+1])
+		if sample != sample || col < 0 || col > float64(f.px) {
+			continue
+		}
+		cx := in.c.xAtFrac(col/float64(f.px), f.vx)
+		if d := math.Abs(cx - x); d < nearest {
+			nearest, value, found = d, float64(fs.y(float32(sample))), true
+		}
+	}
+	if !found || i >= len(f.ranges) {
+		return mark.Get()
+	}
+	return yFrac(value, f.ranges[i], f.logs[i])
+}
+
+// markHit reports which marker (1=A, 2=B) the pointer is on, or 0. The
+// active axis decides whether x or y is compared and which size sets the
+// finger-width threshold.
+func (in *input) markHit(px, py, x float64) int {
+	size := in.plotSize.Get()
+	var at, a, b, span float64
+	if in.c.MarkReading == MarkReadingValue {
+		at, a, b, span = in.yFracAt(py), in.markPos(in.markA), in.markPos(in.markB), float64(size.Height)
+	} else {
+		at, a, b, span = in.frac(x), in.markA.Get(), in.markB.Get(), float64(size.Width)
+	}
+	hit := 0.03
+	if span > 0 {
+		hit = max(hit, 16/span)
+	}
+	switch {
+	case math.Abs(at-a) < hit:
+		return 1
+	case math.Abs(at-b) < hit:
+		return 2
+	}
+	return 0
+}
+
 func (in *input) onMouseMove(e core.MouseEvent) {
 	px := float64(e.Position.X)
+	py := float64(e.Position.Y)
 	x := in.xAt(px)
 	if in.drag.active && in.drag.view.X.Valid() {
 		x = in.xAtIn(px, in.drag.view.X)
@@ -109,11 +240,11 @@ func (in *input) onMouseMove(e core.MouseEvent) {
 	if in.drag.active {
 		switch {
 		case in.drag.sel:
-			in.markB.Set(in.frac(in.snap(x)))
+			in.setAnchor(in.markB, py, x)
 		case in.drag.marker == 1:
-			in.markA.Set(in.frac(in.snap(x)))
+			in.setAnchor(in.markA, py, x)
 		case in.drag.marker == 2:
-			in.markB.Set(in.frac(in.snap(x)))
+			in.setAnchor(in.markB, py, x)
 		case !in.drag.zoom:
 			// A dead zone keeps a press that is not quite on a marker from
 			// panning the waveform on its first pixel of jitter.
@@ -243,28 +374,20 @@ func (in *input) onMouseLeave(core.MouseEvent) {
 }
 
 func (in *input) onPressDown(e core.PressEvent) {
-	x := in.xAt(float64(e.Position.X))
+	px, py := float64(e.Position.X), float64(e.Position.Y)
+	x := in.xAt(px)
 	in.drag = dragState{active: true, mouse: true, zoom: e.Modifiers.Shift, sel: e.Modifiers.Alt, fromX: x, view: in.ownView()}
 	if in.c.Measure {
 		if in.drag.sel {
-			in.markA.Set(in.frac(in.snap(x)))
+			in.setAnchor(in.markA, py, x)
 			in.markB.Set(in.markA.Get())
 			return
 		}
 		if !in.drag.zoom {
-			fx := in.frac(x)
 			// Give the markers a finger's width, about ten points, so a
-			// drag meant for one does not pan the chart instead.
-			hit := 0.03
-			if w := in.plotSize.Get().Width; w > 0 {
-				hit = max(hit, 16/float64(w))
-			}
-			switch {
-			case math.Abs(fx-in.markA.Get()) < hit:
-				in.drag.marker = 1
-			case math.Abs(fx-in.markB.Get()) < hit:
-				in.drag.marker = 2
-			}
+			// drag meant for one does not pan the chart instead. The active
+			// axis picks whether that width is measured in x or y.
+			in.drag.marker = in.markHit(px, py, x)
 		}
 	}
 }
@@ -275,12 +398,20 @@ func (in *input) onPressUp(e core.PressEvent) {
 	}
 	d := in.drag
 	in.drag = dragState{}
-	x := in.xAt(float64(e.Position.X))
+	px, py := float64(e.Position.X), float64(e.Position.Y)
+	x := in.xAt(px)
 	if d.sel {
 		if in.c.Measure {
-			a, b := in.markA.Get(), in.frac(in.snap(x))
-			in.markA.Set(min(a, b))
-			in.markB.Set(max(a, b))
+			if in.c.MarkReading == MarkReadingValue {
+				// Horizontal selection: A is where the press started, B is
+				// where it ended; value order, not x order, decides which
+				// line is higher, so keep them as pressed.
+				in.setAnchor(in.markB, py, x)
+			} else {
+				a, b := in.markA.Get(), in.frac(in.snap(x))
+				in.markA.Set(min(a, b))
+				in.markB.Set(max(a, b))
+			}
 		}
 		return
 	}
@@ -339,17 +470,10 @@ func (in *input) onTouch(e core.TouchEvent) {
 		// A finger on a marker moves it, as a mouse does, instead of
 		// starting a pan that would move the waveform under it.
 		if in.c.Measure && len(e.Touches) == 1 {
-			fx := in.frac(in.xAt(float64(e.Touches[0].Position.X)))
-			hit := 0.03
-			if w := in.plotSize.Get().Width; w > 0 {
-				hit = max(hit, 16/float64(w))
-			}
-			switch {
-			case math.Abs(fx-in.markA.Get()) < hit:
-				in.drag = dragState{active: true, marker: 1}
-				return
-			case math.Abs(fx-in.markB.Get()) < hit:
-				in.drag = dragState{active: true, marker: 2}
+			t := e.Touches[0].Position
+			hit := in.markHit(float64(t.X), float64(t.Y), in.xAt(float64(t.X)))
+			if hit != 0 {
+				in.drag = dragState{active: true, marker: hit}
 				return
 			}
 		}
@@ -361,12 +485,12 @@ func (in *input) onTouch(e core.TouchEvent) {
 		}
 	case core.TouchMove:
 		if in.drag.active && in.drag.marker != 0 && len(e.Touches) == 1 {
-			x := in.frac(in.snap(in.xAt(float64(e.Touches[0].Position.X))))
+			t := e.Touches[0].Position
+			mark := in.markB
 			if in.drag.marker == 1 {
-				in.markA.Set(x)
-			} else {
-				in.markB.Set(x)
+				mark = in.markA
 			}
+			in.setAnchor(mark, float64(t.Y), in.xAt(float64(t.X)))
 			return
 		}
 		if !in.touch.active {
